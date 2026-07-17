@@ -1,0 +1,378 @@
+/* ============================================================
+   Opora Tools — стили приложения
+   Палитра основана на фирменных цветах Bitrix24:
+   - основной голубой:  #2FC6F6
+   - тёмно-синий текст: #535C69
+   - зелёный (успех):   #9DCF00
+   - фон интерфейса:    #F5F7F8
+   ============================================================ */
+
+:root {
+    /* Цвета Bitrix24 */
+    --b24-primary: #2fc6f6;
+    --b24-primary-dark: #12b1e6;
+    --b24-text: #535c69;
+    --b24-text-light: #80868e;
+    --b24-bg: #f5f7f8;
+    --b24-border: #e3e8ea;
+    --b24-success: #9dcf00;
+
+    /* Цвета мессенджеров */
+    --whatsapp: #25d366;
+    --whatsapp-dark: #1ebe5b;
+    --telegram: #229ed9;
+    --telegram-dark: #1c8dc4;
+    --email: #7c6ff0;
+    --email-dark: #6a5ce0;
+
+    /* Общие */
+    --radius: 14px;
+    --radius-sm: 10px;
+    --shadow: 0 4px 20px rgba(83, 92, 105, 0.10);
+    --shadow-hover: 0 8px 28px rgba(83, 92, 105, 0.16);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+body {
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background: var(--b24-bg);
+    color: var(--b24-text);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ------------------------------------------------------------
+   Каркас приложения
+   ------------------------------------------------------------ */
+
+.app {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 24px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 100%;
+}
+
+/* Шапка */
+.app-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.app-logo {
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+}
+
+.app-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--b24-text);
+    line-height: 1.2;
+}
+
+.app-subtitle {
+    font-size: 13px;
+    color: var(--b24-text-light);
+    margin-top: 2px;
+}
+
+/* ------------------------------------------------------------
+   Статус подключения
+   ------------------------------------------------------------ */
+
+.status-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--b24-text-light);
+    padding: 8px 14px;
+    background: #fff;
+    border: 1px solid var(--b24-border);
+    border-radius: var(--radius-sm);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #c9d1d6;
+    flex-shrink: 0;
+}
+
+.status-bar--loading .status-dot {
+    background: var(--b24-primary);
+    animation: pulse 1.2s ease-in-out infinite;
+}
+
+.status-bar--ok .status-dot {
+    background: var(--b24-success);
+}
+
+.status-bar--error .status-dot {
+    background: #ff5752;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* ------------------------------------------------------------
+   Карточка
+   ------------------------------------------------------------ */
+
+.card {
+    background: #fff;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 24px;
+    transition: box-shadow 0.2s ease;
+}
+
+.card--hidden {
+    display: none;
+}
+
+.card-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 22px;
+}
+
+/* Аватар с инициалами */
+.contact-avatar {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--b24-primary), var(--b24-primary-dark));
+    color: #fff;
+    font-size: 20px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    text-transform: uppercase;
+}
+
+.contact-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.contact-name {
+    font-size: 19px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    word-break: break-word;
+}
+
+.contact-details {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.contact-detail {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 14px;
+}
+
+.contact-detail-label {
+    color: var(--b24-text-light);
+    font-size: 12px;
+    min-width: 64px;
+}
+
+.contact-detail-value {
+    font-weight: 600;
+    word-break: break-all;
+}
+
+/* ------------------------------------------------------------
+   Кнопки действий
+   ------------------------------------------------------------ */
+
+.actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+}
+
+.btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 15px 18px;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 15px;
+    font-weight: 600;
+    font-family: inherit;
+    color: #fff;
+    cursor: pointer;
+    transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease, opacity 0.12s ease;
+    box-shadow: 0 2px 8px rgba(83, 92, 105, 0.12);
+}
+
+.btn:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-hover);
+}
+
+.btn:active {
+    transform: translateY(0);
+}
+
+.btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.btn-icon {
+    display: flex;
+    align-items: center;
+}
+
+/* Варианты кнопок */
+.btn--whatsapp { background: var(--whatsapp); }
+.btn--whatsapp:hover:not(:disabled) { background: var(--whatsapp-dark); }
+
+.btn--telegram { background: var(--telegram); }
+.btn--telegram:hover:not(:disabled) { background: var(--telegram-dark); }
+
+.btn--email { background: var(--email); }
+.btn--email:hover:not(:disabled) { background: var(--email-dark); }
+
+.btn--secondary {
+    background: #fff;
+    color: var(--b24-text);
+    border: 1px solid var(--b24-border);
+    box-shadow: none;
+}
+
+.btn--secondary:hover:not(:disabled) {
+    background: var(--b24-bg);
+    border-color: var(--b24-primary);
+    color: var(--b24-primary-dark);
+}
+
+/* ------------------------------------------------------------
+   Пустое состояние
+   ------------------------------------------------------------ */
+
+.empty-state {
+    text-align: center;
+    padding: 16px 8px;
+}
+
+.empty-icon {
+    font-size: 34px;
+    margin-bottom: 10px;
+}
+
+.empty-title {
+    font-size: 17px;
+    margin-bottom: 6px;
+}
+
+.empty-text {
+    font-size: 14px;
+    color: var(--b24-text-light);
+    line-height: 1.5;
+}
+
+/* ------------------------------------------------------------
+   Toast-уведомление
+   ------------------------------------------------------------ */
+
+.toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--b24-text);
+    color: #fff;
+    font-size: 14px;
+    padding: 11px 20px;
+    border-radius: 24px;
+    box-shadow: var(--shadow-hover);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    z-index: 100;
+    max-width: 90vw;
+    text-align: center;
+}
+
+.toast--visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* ------------------------------------------------------------
+   Футер
+   ------------------------------------------------------------ */
+
+.app-footer {
+    margin-top: auto;
+    text-align: center;
+    font-size: 12px;
+    color: var(--b24-text-light);
+    padding-top: 8px;
+}
+
+/* ------------------------------------------------------------
+   Адаптивность
+   ------------------------------------------------------------ */
+
+@media (max-width: 480px) {
+    .app {
+        padding: 16px 10px 12px;
+    }
+
+    .card {
+        padding: 18px 14px;
+    }
+
+    .actions {
+        grid-template-columns: 1fr;
+    }
+
+    .app-title {
+        font-size: 19px;
+    }
+
+    .card-header {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+    }
+
+    .contact-detail {
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+    }
+}
