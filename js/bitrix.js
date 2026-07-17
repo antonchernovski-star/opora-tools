@@ -127,6 +127,45 @@ Opora.Bitrix = (function () {
         return insideBitrix;
     }
 
+    /**
+     * Возвращает публичный URL этого приложения (обработчик для placement.bind).
+     * Работает и на GitHub Pages, и на любом другом хостинге.
+     * @returns {string} например 'https://user.github.io/opora-tools/index.html'
+     */
+    function getHandlerUrl() {
+        let path = window.location.pathname;
+        // Если открыто как каталог (/opora-tools/) — дописываем index.html
+        if (path.endsWith('/')) {
+            path += 'index.html';
+        }
+        return window.location.origin + path;
+    }
+
+    /**
+     * Привязывает приложение к размещению (например, вкладка карточки сделки).
+     * Требует право (scope) `placement`.
+     *
+     * @param {string} placement — код размещения, например 'CRM_DEAL_DETAIL_TAB'
+     * @param {string} title — заголовок вкладки
+     * @returns {Promise<*>}
+     */
+    function bindPlacement(placement, title) {
+        return callMethod('placement.bind', {
+            PLACEMENT: placement,
+            HANDLER: getHandlerUrl(),
+            TITLE: title,
+            LANG_ALL: { ru: { TITLE: title } }
+        });
+    }
+
+    /**
+     * Возвращает список размещений, к которым приложение уже привязано.
+     * @returns {Promise<Array>} массив привязок [{placement, handler, title}, ...]
+     */
+    function getPlacementBindings() {
+        return callMethod('placement.get', {});
+    }
+
     // Публичный интерфейс модуля
     return {
         isAvailable: isAvailable,
@@ -134,7 +173,10 @@ Opora.Bitrix = (function () {
         getPlacement: getPlacement,
         getEntityId: getEntityId,
         callMethod: callMethod,
-        isInsideBitrix: isInsideBitrix
+        isInsideBitrix: isInsideBitrix,
+        getHandlerUrl: getHandlerUrl,
+        bindPlacement: bindPlacement,
+        getPlacementBindings: getPlacementBindings
     };
 
 })();

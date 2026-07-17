@@ -83,6 +83,51 @@ window.Opora = window.Opora || {};
     }
 
     /**
+     * Показывает в пустой карточке кнопку «Добавить вкладку в карточку сделки».
+     * Кнопка вызывает placement.bind (нужно право `placement`) и сама
+     * привязывает приложение к вкладке сделки — без ручной работы с REST.
+     */
+    function showInstallButton() {
+        // Не дублируем кнопку при повторном рендере
+        if ($('btn-install-tab')) {
+            return;
+        }
+
+        const btn = document.createElement('button');
+        btn.id = 'btn-install-tab';
+        btn.type = 'button';
+        btn.className = 'btn btn--email';
+        btn.style.marginTop = '16px';
+        btn.innerHTML = '<span class="btn-label">Добавить вкладку в карточку сделки</span>';
+
+        btn.addEventListener('click', async function () {
+            btn.disabled = true;
+            try {
+                // Проверяем, не привязано ли уже
+                const bindings = await Opora.Bitrix.getPlacementBindings();
+                const already = Array.isArray(bindings) && bindings.some(function (b) {
+                    return b.placement === 'CRM_DEAL_DETAIL_TAB';
+                });
+
+                if (already) {
+                    showToast('Вкладка уже добавлена — откройте любую сделку');
+                    return;
+                }
+
+                await Opora.Bitrix.bindPlacement('CRM_DEAL_DETAIL_TAB', 'Инструменты Опоры');
+                showToast('Готово! Откройте любую сделку — там появилась вкладка');
+            } catch (e) {
+                console.error('[Opora] placement.bind:', e);
+                showToast('Ошибка: ' + e.message + '. Проверьте право placement у приложения');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        $('empty-card').querySelector('.empty-state').appendChild(btn);
+    }
+
+    /**
      * Отрисовывает контакт в карточке и настраивает доступность кнопок.
      * @param {Object} c — контакт в едином формате
      */
@@ -221,8 +266,11 @@ window.Opora = window.Opora || {};
             setStatus('ok', 'Bitrix24 · размещение: ' + placementInfo.placement);
             showEmpty(
                 'Откройте из карточки сделки',
-                'Приложение определяет клиента автоматически, когда открыто во вкладке сделки CRM.'
+                'Приложение определяет клиента автоматически, когда открыто во вкладке сделки CRM. ' +
+                'Если вкладки в сделках ещё нет — добавьте её кнопкой ниже.'
             );
+            // Открыто из меню/слева — предлагаем установить вкладку в сделку
+            showInstallButton();
         }
     }
 
