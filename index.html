@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Инструменты Опоры</title>
+
+    <!-- Стили приложения -->
+    <link rel="stylesheet" href="css/style.css">
+
+    <!-- Bitrix24 JS SDK (официальный) -->
+    <script src="https://api.bitrix24.com/api/v1/"></script>
+</head>
+<body>
+
+    <div class="app">
+
+        <!-- Шапка -->
+        <header class="app-header">
+            <img src="assets/logo.svg" alt="Опора" class="app-logo">
+            <div class="app-header-text">
+                <h1 class="app-title">Инструменты Опоры</h1>
+                <p class="app-subtitle">Быстрые действия по клиенту из карточки сделки</p>
+            </div>
+        </header>
+
+        <!-- Статус подключения к Bitrix24 -->
+        <div id="status-bar" class="status-bar status-bar--loading">
+            <span class="status-dot"></span>
+            <span id="status-text">Подключение к Bitrix24…</span>
+        </div>
+
+        <!-- Карточка контакта -->
+        <section id="contact-card" class="card card--hidden">
+            <div class="card-header">
+                <div class="contact-avatar" id="contact-avatar">?</div>
+                <div class="contact-info">
+                    <h2 class="contact-name" id="contact-name">—</h2>
+                    <div class="contact-details">
+                        <div class="contact-detail">
+                            <span class="contact-detail-label">Телефон</span>
+                            <span class="contact-detail-value" id="contact-phone">—</span>
+                        </div>
+                        <div class="contact-detail">
+                            <span class="contact-detail-label">Email</span>
+                            <span class="contact-detail-value" id="contact-email">—</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Кнопки действий -->
+            <div class="actions">
+                <button id="btn-whatsapp" class="btn btn--whatsapp" type="button">
+                    <span class="btn-icon">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                            <path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38a9.87 9.87 0 0 0 4.79 1.22c5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.83 14.12c-.25.7-1.45 1.33-2 1.38-.51.05-1.16.24-3.9-.81-3.3-1.3-5.42-4.65-5.58-4.87-.16-.22-1.33-1.77-1.33-3.38 0-1.61.85-2.4 1.15-2.73.3-.33.65-.41.87-.41h.62c.2 0 .47-.07.73.56.27.65.91 2.24.99 2.4.08.16.13.36.03.58-.11.22-.16.35-.32.54-.16.19-.34.43-.48.58-.16.16-.33.34-.14.66.19.33.85 1.4 1.83 2.27 1.26 1.12 2.32 1.47 2.65 1.63.33.16.52.14.71-.08.19-.22.82-.96 1.04-1.29.22-.33.44-.27.73-.16.3.11 1.9.9 2.23 1.06.33.16.54.24.62.38.08.13.08.79-.17 1.49z"/>
+                        </svg>
+                    </span>
+                    <span class="btn-label">WhatsApp</span>
+                </button>
+
+                <button id="btn-telegram" class="btn btn--telegram" type="button">
+                    <span class="btn-icon">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                            <path d="M11.94 2a10 10 0 1 0 .12 20 10 10 0 0 0-.12-20zm4.9 6.88l-1.63 7.71c-.12.55-.45.68-.9.42l-2.5-1.84-1.2 1.16c-.14.13-.25.25-.5.25l.17-2.53 4.6-4.15c.2-.18-.05-.28-.31-.1l-5.69 3.58-2.45-.77c-.53-.17-.54-.53.11-.79l9.58-3.69c.44-.16.83.11.72.75z"/>
+                        </svg>
+                    </span>
+                    <span class="btn-label">Telegram</span>
+                </button>
+
+                <button id="btn-email" class="btn btn--email" type="button">
+                    <span class="btn-icon">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <rect x="3" y="5" width="18" height="14" rx="2"/>
+                            <path d="M3 7l9 6 9-6"/>
+                        </svg>
+                    </span>
+                    <span class="btn-label">Email</span>
+                </button>
+
+                <button id="btn-copy-phone" class="btn btn--secondary" type="button">
+                    <span class="btn-icon">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <rect x="9" y="9" width="12" height="12" rx="2"/>
+                            <path d="M5 15V5a2 2 0 0 1 2-2h10"/>
+                        </svg>
+                    </span>
+                    <span class="btn-label">Копировать телефон</span>
+                </button>
+
+                <button id="btn-copy-email" class="btn btn--secondary" type="button">
+                    <span class="btn-icon">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <rect x="9" y="9" width="12" height="12" rx="2"/>
+                            <path d="M5 15V5a2 2 0 0 1 2-2h10"/>
+                        </svg>
+                    </span>
+                    <span class="btn-label">Копировать email</span>
+                </button>
+            </div>
+        </section>
+
+        <!-- Сообщение, если контакт не найден / приложение открыто не из сделки -->
+        <section id="empty-card" class="card card--hidden">
+            <div class="empty-state">
+                <div class="empty-icon">ℹ️</div>
+                <h2 class="empty-title" id="empty-title">Нет данных</h2>
+                <p class="empty-text" id="empty-text">
+                    Откройте приложение из карточки сделки, чтобы увидеть данные контакта.
+                </p>
+            </div>
+        </section>
+
+        <!-- Всплывающее уведомление -->
+        <div id="toast" class="toast" role="status"></div>
+
+        <footer class="app-footer">
+            Опора · Инструменты · <span id="app-version">v1.0.0</span>
+        </footer>
+    </div>
+
+    <!--
+        Порядок подключения модулей важен:
+        bitrix.js  — обёртка над BX24 SDK (инициализация, REST-вызовы)
+        crm.js     — работа с CRM (сделка, контакт)
+        whatsapp.js— инструмент WhatsApp
+        telegram.js— инструмент Telegram
+        app.js     — точка входа, UI, регистрация инструментов
+    -->
+    <script src="js/bitrix.js"></script>
+    <script src="js/crm.js"></script>
+    <script src="js/whatsapp.js"></script>
+    <script src="js/telegram.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
