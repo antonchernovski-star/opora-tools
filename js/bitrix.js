@@ -167,6 +167,38 @@ Opora.Bitrix = (function () {
     }
 
     /**
+     * Читает настройку приложения (общая для всего портала).
+     * @param {string} name — имя настройки
+     * @returns {*} значение или null
+     */
+    function getAppOption(name) {
+        try {
+            const v = BX24.appOption.get(name);
+            return (v === undefined || v === '') ? null : v;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
+     * Сохраняет настройку приложения (нужны права администратора).
+     * @param {string} name — имя настройки
+     * @param {string} value — значение (строка)
+     * @returns {Promise<void>}
+     */
+    function setAppOption(name, value) {
+        return new Promise(function (resolve, reject) {
+            try {
+                BX24.appOption.set(name, value, function (result) {
+                    resolve(result);
+                });
+            } catch (e) {
+                reject(e);
+            }
+        });
+    }
+
+    /**
      * Отвязывает приложение от размещения (все обработчики этого размещения).
      * Нужно, чтобы обновить устаревший handler после перезаливки приложения.
      * @param {string} placement — код размещения, например 'CRM_DEAL_DETAIL_TAB'
@@ -187,7 +219,9 @@ Opora.Bitrix = (function () {
         getHandlerUrl: getHandlerUrl,
         bindPlacement: bindPlacement,
         getPlacementBindings: getPlacementBindings,
-        unbindPlacement: unbindPlacement
+        unbindPlacement: unbindPlacement,
+        getAppOption: getAppOption,
+        setAppOption: setAppOption
     };
 
 })();

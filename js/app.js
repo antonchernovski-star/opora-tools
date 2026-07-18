@@ -187,6 +187,16 @@ window.Opora = window.Opora || {};
             '<input type="text" id="cfg-wazzup-key" placeholder="API-ключ Wazzup" value="' + (Opora.Messengers.WAZZUP_CONFIG.apiKey || '') + '">' +
             '</div>';
 
+        html += '<h3 class="checker-title" style="margin-top:18px">Проверка номера на спам (SpravPortal)</h3>' +
+            '<p class="checker-hint">Адрес сервиса и ключ выдаёт SpravPortal вместе с ключом ' +
+            '(портал <a href="https://app.spravportal.ru" target="_blank" rel="noopener">app.spravportal.ru</a>). ' +
+            'У тестового и боевого ключей адреса разные — вводите пару целиком.</p>' +
+            '<div class="checker-row">' +
+            '<span class="checker-label">SpravPortal</span>' +
+            '<input type="text" id="cfg-spravportal-url" placeholder="Адрес сервиса (https://b2b-api-….spravportal.ru)" value="' + (Opora.PhoneCheck.CONFIG.apiUrl || '') + '">' +
+            '<input type="text" id="cfg-spravportal-key" placeholder="Ключ API (sp_…)" value="' + (Opora.PhoneCheck.CONFIG.apiKey || '') + '">' +
+            '</div>';
+
         html += '<button id="btn-save-checker" class="btn btn--email checker-save" type="button">' +
             '<span class="btn-label">Сохранить настройки</span></button>';
 
@@ -207,6 +217,10 @@ window.Opora = window.Opora || {};
                 });
                 await Opora.Messengers.saveCheckerConfig(cfgNew);
                 await Opora.Messengers.saveWazzupConfig($('cfg-wazzup-key').value);
+                await Opora.PhoneCheck.saveConfig(
+                    $('cfg-spravportal-url').value,
+                    $('cfg-spravportal-key').value
+                );
                 showToast('Настройки сохранены');
             } catch (e) {
                 console.error('[Opora] Сохранение настроек:', e);
@@ -450,8 +464,69 @@ window.Opora = window.Opora || {};
         showToast('Заполните API-ключ Wazzup в настройках приложения');
     }
 
+    // ------------------------------------------------------------
+    // Проверка номера на спам (SpravPortal)
+    // ------------------------------------------------------------
+
+    /**
+     * Показывает результат проверки номера под кнопкой.
+     * @param {'ok'|'spam'|'error'} state — состояние
+     * @param {string} html — содержимое (уже безопасное)
+     */
+    function renderPhoneCheckResult(state, html) {
+        const box = $('phonecheck-result');
+        if (!box) return;
+        box.className = 'phonecheck-result phonecheck-result--' + state;
+        box.innerHTML = html;
+    }
+
+    /** Экранирует текст для вставки в innerHTML. */
+    function escapeHtml(s) {
+        const div = document.createElement('div');
+        div.textContent = String(s == null ? '' : s);
+        return div.innerHTML;
+    }
+
+    /** Запускает проверку номера клиента через SpravPortal. */
+    async function runPhoneCheck() {
+        const btn = $('btn-phonecheck');
+        if (!contact || !contact.phone) {
+            showToast('У клиента не указан телефон');
+            return;
+        }
+        if (!Opora.PhoneCheck.enabled()) {
+            showToast('Заполните адрес и ключ SpravPortal в настройках приложения');
+            return;
+        }
+
+        btn.disabled = true;
+        renderPhoneCheckResult('loading', 'Проверяю номер…');
+
+        const r = await Opora.PhoneCheck.check(contact.phone);
+        btn.disabled = false;
+
+        if (!r) {
+            renderPhoneCheckResult('error', escapeHtml(Opora.PhoneCheck.check.lastError || 'Не удалось проверить номер'));
+            return;
+        }
+
+        const extra = [r.operator, r.region].filter(Boolean).map(escapeHtml).join(' · ');
+        if (r.isSpam) {
+            const cats = r.categories.length ? r.categories.map(escapeHtml).join(', ') : 'без категории';
+            renderPhoneCheckResult('spam',
+                '<strong>Спам-номер</strong> — ' + cats +
+                (extra ? '<span class="phonecheck-extra">' + extra + '</span>' : ''));
+        } else {
+            renderPhoneCheckResult('ok',
+                '<strong>Чисто</strong> — жалоб на номер нет' +
+                (extra ? '<span class="phonecheck-extra">' + extra + '</span>' : ''));
+        }
+    }
+
     /** Привязывает обработчики ко всем кнопкам. */
     function bindActions() {
+        $('btn-phonecheck').addEventListener('click', runPhoneCheck);
+
         ['whatsapp', 'telegram', 'max'].forEach(function (ch) {
             $('btn-' + ch).addEventListener('click', function () {
                 onMessengerClick(ch);
@@ -491,9 +566,10 @@ window.Opora = window.Opora || {};
         setStatus('loading', 'Подключение к Bitrix24…');
         await Opora.Bitrix.init();
 
-        // Подтягиваем ключи чекеров Green API и Wazzup из настроек приложения
+        // Подтягиваем ключи чекеров Green API, Wazzup и SpravPortal из настроек
         Opora.Messengers.loadCheckerConfig();
         Opora.Messengers.loadWazzupConfig();
+        Opora.PhoneCheck.loadConfig();
 
         // Текущий сотрудник — для окна чатов Wazzup (не критично при ошибке)
         Opora.Bitrix.callMethod('user.current', {})
