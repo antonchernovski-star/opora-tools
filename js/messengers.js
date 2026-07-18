@@ -27,18 +27,206 @@ window.Opora = window.Opora || {};
 Opora.Messengers = (function () {
 
     /**
-     * Заготовка под проверку WhatsApp ДО переписки (Green API и аналоги).
-     * Чтобы включить: заполните apiUrl/идентификаторы своего инстанса.
-     * Пока ключа нет — проверка выключена, статус будет «не проверено».
+     * Проверка наличия мессенджера у номера ДО переписки — через Green API.
+     *
+     * Для каждого мессенджера нужен СВОЙ инстанс Green API
+     * (ЛК: console.green-api.com → создать инстанс нужного типа →
+     * скопировать apiUrl, idInstance, apiTokenInstance).
+     * Пока поля пустые — проверка канала выключена, бейдж «не проверено».
+     *
+     * ВНИМАНИЕ: токены видны в коде приложения любому, кто откроет исходник.
+     * С токеном инстанса можно отправлять сообщения от имени подключённого
+     * номера — используйте отдельные технические номера и следите за лимитами.
      */
     const CHECKER_CONFIG = {
-        enabled: false,
-        // Пример для Green API:
-        // urlTemplate: 'https://api.green-api.com/waInstance{id}/checkWhatsapp/{token}'
-        urlTemplate: '',
-        instanceId: '',
-        token: ''
+        whatsapp: { apiUrl: 'https://api.green-api.com', idInstance: '', apiTokenInstance: '' },
+        telegram: { apiUrl: 'https://api.green-api.com', idInstance: '', apiTokenInstance: '' },
+        max:      { apiUrl: 'https://api.green-api.com', idInstance: '', apiTokenInstance: '' }
     };
+
+    /** Имя настройки приложения Bitrix24, где лежит конфиг чекеров (JSON). */
+    const CONFIG_OPTION_NAME = 'green_api_checker_config';
+
+    /**
+     * Конфиг окна чатов Wazzup (первое сообщение клиенту с корпоративных
+     * каналов WhatsApp/Telegram/MAX, когда переписки ещё нет).
+     * API-ключ берётся в личном кабинете Wazzup: Настройки → Интеграция через API.
+     * Хранится в настройках приложения Bitrix24 (app.option), не в коде.
+     */
+    const WAZZUP_CONFIG = { apiKey: '' };
+
+    /** Имя настройки приложения Bitrix24 для конфига Wazzup (JSON). */
+    const WAZZUP_OPTION_NAME = 'wazzup_iframe_config';
+
+    /** Загружает конфиг Wazzup из настроек приложения. */
+    function loadWazzupConfig() {
+        try {
+            const raw = Opora.Bitrix.getAppOption(WAZZUP_OPTION_NAME);
+            if (!raw) return;
+            const saved = JSON.parse(raw);
+            WAZZUP_CONFIG.apiKey = saved.apiKey || '';
+        } catch (e) {
+            console.warn('[Opora.Messengers] Конфиг Wazzup не прочитан:', e.message);
+        }
+    }
+
+    /**
+     * Сохраняет конфиг Wazzup в настройки приложения (нужны права админа).
+     * @param {string} apiKey
+     * @returns {Promise<void>}
+     */
+    function saveWazzupConfig(apiKey) {
+        WAZZUP_CONFIG.apiKey = String(apiKey || '').trim();
+        return Opora.Bitrix.setAppOption(WAZZUP_OPTION_NAME, JSON.stringify(WAZZUP_CONFIG));
+    }
+
+    /** @returns {boolean} настроено ли окно чатов Wazzup */
+    function wazzupEnabled() {
+        return !!WAZZUP_CONFIG.apiKey;
+    }
+
+    /**
+     * Запрашивает у Wazzup ссылку на окно чатов по конкретному клиенту
+     * (официальное API «Окно чатов (iFrame)»: POST /v3/iframe).
+     * В этом окне сотрудник видит чаты клиента по всем каналам
+     * и может написать ПЕРВЫМ с корпоративного номера (WhatsApp/Telegram/MAX).
+     *
+     * @param {{id: string, name: string}} user — сотрудник Bitrix24
+     * @param {string} phone — телефон клиента в любом формате
+     * @param {string} [clientName] — имя клиента (для новых контактов Wazzup)
+     * @returns {Promise<string|null>} URL окна чатов или null при ошибке
+     */
+    async function getWazzupIframeUrl(user, phone, clientName) {
+        if (!wazzupEnabled()) return null;
+
+        const digits = Opora.WhatsApp.normalizePhone(phone);
+        if (!digits) return null;
+
+        const body = {
+            user: { id: String(user.id || 'opora-tools'), name: user.name || 'Сотрудник' },
+            scope: 'card',
+            // Фильтр «карточка клиента»: указываем телефон клиента.
+            // Каналы (Telegram/MAX/WhatsApp) выбираются внутри окна Wazzup
+            // при создании диалога — «Откуда писать».
+            filter: [{ chatType: 'whatsapp', chatId: digits, name: clientName || digits }]
+        };
+
+        try {
+            const resp = await fetch('https://api.wazzup24.com/v3/iframe', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + WAZZUP_CONFIG.apiKey
+                },
+                body: JSON.stringify(body)
+            });
+            const data = await resp.json().catch(function () { return {}; });
+            if (!resp.ok || !data.url) {
+                console.warn('[Opora.Messengers] Wazzup iframe: HTTP ' + resp.status, JSON.stringify(data));
+                return null;
+            }
+            return data.url;
+        } catch (e) {
+            console.warn('[Opora.Messengers] Wazzup iframe:', e.message);
+            return null;
+        }
+    }
+
+    /**
+     * Загружает конфиг чекеров из настроек приложения Bitrix24.
+     * Вызывается один раз при старте (после BX24.init).
+     */
+    function loadCheckerConfig() {
+        try {
+            const raw = Opora.Bitrix.getAppOption(CONFIG_OPTION_NAME);
+            if (!raw) return;
+            const saved = JSON.parse(raw);
+            CHANNELS.forEach(function (ch) {
+                if (saved[ch]) {
+                    CHECKER_CONFIG[ch].apiUrl = saved[ch].apiUrl || CHECKER_CONFIG[ch].apiUrl;
+                    CHECKER_CONFIG[ch].idInstance = saved[ch].idInstance || '';
+                    CHECKER_CONFIG[ch].apiTokenInstance = saved[ch].apiTokenInstance || '';
+                }
+            });
+        } catch (e) {
+            console.warn('[Opora.Messengers] Конфиг чекеров не прочитан:', e.message);
+        }
+    }
+
+    /**
+     * Сохраняет конфиг чекеров в настройки приложения Bitrix24
+     * (доступно администраторам портала).
+     * @param {Object} cfg — { whatsapp: {idInstance, apiTokenInstance}, ... }
+     * @returns {Promise<void>}
+     */
+    function saveCheckerConfig(cfg) {
+        CHANNELS.forEach(function (ch) {
+            if (cfg[ch]) {
+                CHECKER_CONFIG[ch].idInstance = (cfg[ch].idInstance || '').trim();
+                CHECKER_CONFIG[ch].apiTokenInstance = (cfg[ch].apiTokenInstance || '').trim();
+                const url = (cfg[ch].apiUrl || '').trim().replace(/\/+$/, '');
+                if (url) CHECKER_CONFIG[ch].apiUrl = url;
+            }
+        });
+        return Opora.Bitrix.setAppOption(CONFIG_OPTION_NAME, JSON.stringify(CHECKER_CONFIG));
+    }
+
+    /**
+     * Проверяет, включён ли чекер для канала (заполнены ли ключи).
+     * @param {string} channel
+     * @returns {boolean}
+     */
+    function checkerEnabled(channel) {
+        const c = CHECKER_CONFIG[channel];
+        return !!(c && c.apiUrl && c.idInstance && c.apiTokenInstance);
+    }
+
+    /**
+     * Проверяет наличие аккаунта мессенджера у номера через Green API.
+     *
+     * Методы Green API:
+     *  - WhatsApp: POST /waInstance{id}/checkWhatsapp/{token} → {existsWhatsapp}
+     *  - Telegram и MAX: POST /waInstance{id}/checkAccount/{token} → {exist}
+     *
+     * @param {string} channel — 'whatsapp' | 'telegram' | 'max'
+     * @param {string} phone — телефон в любом формате
+     * @returns {Promise<boolean|null>} true/false — результат, null — ошибка/выключено
+     */
+    async function checkAccount(channel, phone) {
+        if (!checkerEnabled(channel)) return null;
+
+        const digits = Opora.WhatsApp.normalizePhone(phone);
+        if (!digits) return null;
+
+        const c = CHECKER_CONFIG[channel];
+        // У каждого инстанса Green API свой поддомен:
+        // первые 4 цифры idInstance, например 4100 → https://4100.api.green-api.com
+        const apiUrl = (c.apiUrl && c.apiUrl !== 'https://api.green-api.com')
+            ? c.apiUrl
+            : 'https://' + String(c.idInstance).slice(0, 4) + '.api.green-api.com';
+        const method = channel === 'whatsapp' ? 'checkWhatsapp' : 'checkAccount';
+        const url = apiUrl + '/waInstance' + c.idInstance + '/' + method + '/' + c.apiTokenInstance;
+
+        try {
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phoneNumber: parseInt(digits, 10) })
+            });
+            if (!resp.ok) {
+                console.warn('[Opora.Messengers] Чекер ' + channel + ': HTTP ' + resp.status);
+                return null;
+            }
+            const data = await resp.json();
+            if (channel === 'whatsapp') {
+                return typeof data.existsWhatsapp === 'boolean' ? data.existsWhatsapp : null;
+            }
+            return typeof data.exist === 'boolean' ? data.exist : null;
+        } catch (e) {
+            console.warn('[Opora.Messengers] Чекер ' + channel + ':', e.message);
+            return null;
+        }
+    }
 
     /** Коды каналов. */
     const CHANNELS = ['whatsapp', 'telegram', 'max'];
@@ -88,17 +276,20 @@ Opora.Messengers = (function () {
      * @param {number} ownerTypeId — 1 = лид, 2 = сделка
      * @param {string|number} ownerId — ID лида/сделки
      * @param {Array} [rawEmails] — сырое мультиполе EMAIL (для маркеров Wazzup)
+     * @param {string} [phone] — телефон клиента (для проверки чекером Green API)
      * @returns {Promise<Object>} карта вида:
      *  {
-     *    whatsapp: { hasChat: false, dialogId: null },
-     *    telegram: { hasChat: false, dialogId: null },
-     *    max:      { hasChat: true,  dialogId: 'imol|wz_max_...' }
+     *    whatsapp: { hasChat: false, dialogId: null, accountExists: true },
+     *    telegram: { hasChat: false, dialogId: null, accountExists: null },
+     *    max:      { hasChat: true,  dialogId: 'imol|wz_max_...', accountExists: null }
      *  }
+     *  accountExists: true/false — результат чекера Green API,
+     *  null — чекер выключен, ошибка или проверка не потребовалась.
      */
-    async function detect(ownerTypeId, ownerId, rawEmails) {
+    async function detect(ownerTypeId, ownerId, rawEmails, phone) {
         const map = {};
         CHANNELS.forEach(function (ch) {
-            map[ch] = { hasChat: false, dialogId: null };
+            map[ch] = { hasChat: false, dialogId: null, accountExists: null };
         });
 
         // 1. Маркеры из контактных данных (email *@max.wazzup и т.п.)
@@ -143,8 +334,19 @@ Opora.Messengers = (function () {
             console.warn('[Opora.Messengers] Не удалось получить активности:', e.message);
         }
 
-        // 3. Внешняя проверка WhatsApp до переписки (если настроен чекер)
-        //    Пока CHECKER_CONFIG.enabled = false — пропускается.
+        // 3. Чекеры Green API: для каналов без переписки проверяем
+        //    наличие аккаунта по номеру (если ключи заполнены).
+        //    Проверки идут параллельно, ошибки не ломают остальное.
+        const pending = CHANNELS
+            .filter(function (ch) { return !map[ch].hasChat && checkerEnabled(ch); })
+            .map(function (ch) {
+                return checkAccount(ch, phone).then(function (exists) {
+                    map[ch].accountExists = exists;
+                });
+            });
+        if (pending.length) {
+            await Promise.all(pending);
+        }
 
         return map;
     }
@@ -189,7 +391,16 @@ Opora.Messengers = (function () {
         openDialog: openDialog,
         isServiceEmail: isServiceEmail,
         channelFromText: channelFromText,
-        CHECKER_CONFIG: CHECKER_CONFIG
+        checkAccount: checkAccount,
+        checkerEnabled: checkerEnabled,
+        loadCheckerConfig: loadCheckerConfig,
+        saveCheckerConfig: saveCheckerConfig,
+        CHECKER_CONFIG: CHECKER_CONFIG,
+        loadWazzupConfig: loadWazzupConfig,
+        saveWazzupConfig: saveWazzupConfig,
+        wazzupEnabled: wazzupEnabled,
+        getWazzupIframeUrl: getWazzupIframeUrl,
+        WAZZUP_CONFIG: WAZZUP_CONFIG
     };
 
 })();
