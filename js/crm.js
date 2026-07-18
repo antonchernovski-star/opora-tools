@@ -76,6 +76,65 @@ Opora.Crm = (function () {
     }
 
     /**
+     * Получает лид по ID.
+     * @param {string|number} leadId — ID лида
+     * @returns {Promise<Object>} данные лида
+     */
+    function getLead(leadId) {
+        return Opora.Bitrix.callMethod('crm.lead.get', { id: leadId });
+    }
+
+    /**
+     * Преобразует «сырой» лид Bitrix24 в единый формат приложения.
+     * У лида имя/телефон/email хранятся прямо в нём (контакт не обязателен).
+     * @param {Object} raw — ответ crm.lead.get
+     * @returns {Object} нормализованный контакт
+     */
+    function normalizeLead(raw) {
+        const firstName = (raw.NAME || '').trim();
+        const lastName = (raw.LAST_NAME || '').trim();
+        const fullName = [firstName, lastName].filter(Boolean).join(' ')
+            || (raw.TITLE || '').trim()
+            || 'Без имени';
+
+        return {
+            id: String(raw.ID || ''),
+            firstName: firstName,
+            lastName: lastName,
+            fullName: fullName,
+            phone: firstMultiFieldValue(raw.PHONE),
+            email: firstMultiFieldValue(raw.EMAIL)
+        };
+    }
+
+    /**
+     * Сценарий для лида: по ID лида получить данные клиента.
+     * Если у лида есть привязанный контакт и в самом лиде нет телефона —
+     * добираем данные из контакта.
+     *
+     * @param {string|number} leadId — ID лида
+     * @returns {Promise<Object>} нормализованный контакт
+     */
+    async function getContactByLead(leadId) {
+        const lead = await getLead(leadId);
+        const fromLead = normalizeLead(lead);
+
+        // Телефон/email есть в самом лиде — этого достаточно
+        if (fromLead.phone || fromLead.email) {
+            return fromLead;
+        }
+
+        // Иначе пробуем контакт лида
+        const contactId = lead.CONTACT_ID;
+        if (contactId && Number(contactId) > 0) {
+            const rawContact = await getContact(contactId);
+            return normalizeContact(rawContact);
+        }
+
+        return fromLead;
+    }
+
+    /**
      * Основной сценарий: по ID сделки получить её контакт.
      *
      * Шаги:
@@ -104,7 +163,10 @@ Opora.Crm = (function () {
         getDeal: getDeal,
         getContact: getContact,
         getContactByDeal: getContactByDeal,
-        normalizeContact: normalizeContact
+        getLead: getLead,
+        getContactByLead: getContactByLead,
+        normalizeContact: normalizeContact,
+        normalizeLead: normalizeLead
     };
 
 })();

@@ -98,24 +98,33 @@ window.Opora = window.Opora || {};
         btn.type = 'button';
         btn.className = 'btn btn--email';
         btn.style.marginTop = '16px';
-        btn.innerHTML = '<span class="btn-label">Добавить вкладку в карточку сделки</span>';
+        btn.innerHTML = '<span class="btn-label">Добавить вкладку в карточку лида</span>';
 
         btn.addEventListener('click', async function () {
             btn.disabled = true;
             try {
-                // Проверяем, не привязано ли уже
+                // Смотрим текущие привязки (для диагностики в консоли)
                 const bindings = await Opora.Bitrix.getPlacementBindings();
-                const already = Array.isArray(bindings) && bindings.some(function (b) {
-                    return b.placement === 'CRM_DEAL_DETAIL_TAB';
-                });
+                console.log('[Opora] placement.get:', JSON.stringify(bindings));
 
-                if (already) {
-                    showToast('Вкладка уже добавлена — откройте любую сделку');
-                    return;
+                // Всегда пересоздаём привязку: при перезаливке ZIP адрес приложения
+                // на CDN Bitrix24 меняется, и старый handler перестаёт работать.
+                // Вкладка лида + кнопка «Расширения» в шапке карточки лида.
+                // Кнопка в шапке не зависит от кастомизации меню вкладок.
+                const placements = ['CRM_LEAD_DETAIL_TAB', 'CRM_LEAD_DETAIL_TOOLBAR'];
+                for (const p of placements) {
+                    const hasOld = Array.isArray(bindings) && bindings.some(function (b) {
+                        return b.placement === p;
+                    });
+                    if (hasOld) {
+                        const unbindResult = await Opora.Bitrix.unbindPlacement(p);
+                        console.log('[Opora] placement.unbind', p, JSON.stringify(unbindResult));
+                    }
+                    const bindResult = await Opora.Bitrix.bindPlacement(p, 'Инструменты Опоры');
+                    console.log('[Opora] placement.bind', p, JSON.stringify(bindResult),
+                        'handler:', Opora.Bitrix.getHandlerUrl());
                 }
-
-                await Opora.Bitrix.bindPlacement('CRM_DEAL_DETAIL_TAB', 'Инструменты Опоры');
-                showToast('Готово! Откройте любую сделку — там появилась вкладка');
+                showToast('Готово! Откройте любой лид — там появилась вкладка');
             } catch (e) {
                 console.error('[Opora] placement.bind:', e);
                 showToast('Ошибка: ' + e.message + '. Проверьте право placement у приложения');
@@ -253,10 +262,17 @@ window.Opora = window.Opora || {};
 
         console.log('[Opora] PLACEMENT:', placementInfo.placement, 'ENTITY_ID:', entityId);
 
-        // Открыто из карточки сделки?
+        // Откуда открыто приложение?
         const isDealPlacement = placementInfo.placement.indexOf('CRM_DEAL') === 0;
+        const isLeadPlacement = placementInfo.placement.indexOf('CRM_LEAD') === 0;
 
-        if (isDealPlacement && entityId) {
+        if (isLeadPlacement && entityId) {
+            setStatus('loading', 'Лид #' + entityId + ' — загрузка данных…');
+
+            const c = await Opora.Crm.getContactByLead(entityId);
+            renderContact(c);
+            setStatus('ok', 'Bitrix24 · лид #' + entityId);
+        } else if (isDealPlacement && entityId) {
             setStatus('loading', 'Сделка #' + entityId + ' — загрузка контакта…');
 
             const c = await Opora.Crm.getContactByDeal(entityId);
@@ -265,9 +281,9 @@ window.Opora = window.Opora || {};
         } else {
             setStatus('ok', 'Bitrix24 · размещение: ' + placementInfo.placement);
             showEmpty(
-                'Откройте из карточки сделки',
-                'Приложение определяет клиента автоматически, когда открыто во вкладке сделки CRM. ' +
-                'Если вкладки в сделках ещё нет — добавьте её кнопкой ниже.'
+                'Откройте из карточки лида',
+                'Приложение определяет клиента автоматически, когда открыто во вкладке лида или сделки CRM. ' +
+                'Если вкладки ещё нет — добавьте её кнопкой ниже.'
             );
             // Открыто из меню/слева — предлагаем установить вкладку в сделку
             showInstallButton();

@@ -166,6 +166,16 @@ Opora.Bitrix = (function () {
         return callMethod('placement.get', {});
     }
 
+    /**
+     * Отвязывает приложение от размещения (все обработчики этого размещения).
+     * Нужно, чтобы обновить устаревший handler после перезаливки приложения.
+     * @param {string} placement — код размещения, например 'CRM_DEAL_DETAIL_TAB'
+     * @returns {Promise<*>}
+     */
+    function unbindPlacement(placement) {
+        return callMethod('placement.unbind', { PLACEMENT: placement });
+    }
+
     // Публичный интерфейс модуля
     return {
         isAvailable: isAvailable,
@@ -176,7 +186,8 @@ Opora.Bitrix = (function () {
         isInsideBitrix: isInsideBitrix,
         getHandlerUrl: getHandlerUrl,
         bindPlacement: bindPlacement,
-        getPlacementBindings: getPlacementBindings
+        getPlacementBindings: getPlacementBindings,
+        unbindPlacement: unbindPlacement
     };
 
 })();
