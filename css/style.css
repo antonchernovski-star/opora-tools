@@ -566,3 +566,60 @@ body {
         gap: 2px;
     }
 }
+
+/* ============================================================
+   Проверка номера на спам (SpravPortal)
+   ============================================================ */
+
+.phonecheck {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.phonecheck-result {
+    font-size: 13px;
+    line-height: 1.45;
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--b24-border);
+    background: var(--b24-bg);
+    color: var(--b24-text);
+}
+
+.phonecheck-result--hidden {
+    display: none;
+}
+
+.phonecheck-result--loading {
+    color: var(--b24-text-light);
+}
+
+/* Чисто: жалоб нет */
+.phonecheck-result--ok {
+    background: #f3f9e3;
+    border-color: #d7e9a8;
+    color: #55701a;
+}
+
+/* Спам-номер */
+.phonecheck-result--spam {
+    background: #fdf0f0;
+    border-color: #f0cccc;
+    color: #a94442;
+}
+
+/* Ошибка проверки */
+.phonecheck-result--error {
+    background: #fff8e8;
+    border-color: #f0e0b0;
+    color: #8a6d1a;
+}
+
+.phonecheck-extra {
+    display: block;
+    margin-top: 4px;
+    font-size: 12px;
+    opacity: 0.75;
+}
