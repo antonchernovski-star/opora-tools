@@ -25,6 +25,12 @@ window.Opora = window.Opora || {};
     /** Текущий контакт (единый формат из Opora.Crm). */
     let contact = null;
 
+    /**
+     * Карта мессенджеров клиента (из Opora.Messengers.detect):
+     * { whatsapp: {hasChat, dialogId}, telegram: {...}, max: {...} }
+     */
+    let messengers = null;
+
     /** Демо-контакт для открытия вне Bitrix24. */
     const DEMO_CONTACT = {
         id: 'demo',
@@ -109,9 +115,12 @@ window.Opora = window.Opora || {};
 
                 // Всегда пересоздаём привязку: при перезаливке ZIP адрес приложения
                 // на CDN Bitrix24 меняется, и старый handler перестаёт работать.
-                // Вкладка лида + кнопка «Расширения» в шапке карточки лида.
+                // Вкладки + кнопки в шапке карточек лида и сделки.
                 // Кнопка в шапке не зависит от кастомизации меню вкладок.
-                const placements = ['CRM_LEAD_DETAIL_TAB', 'CRM_LEAD_DETAIL_TOOLBAR'];
+                const placements = [
+                    'CRM_LEAD_DETAIL_TAB', 'CRM_LEAD_DETAIL_TOOLBAR',
+                    'CRM_DEAL_DETAIL_TAB', 'CRM_DEAL_DETAIL_TOOLBAR'
+                ];
                 for (const p of placements) {
                     const hasOld = Array.isArray(bindings) && bindings.some(function (b) {
                         return b.placement === p;
@@ -153,17 +162,69 @@ window.Opora = window.Opora || {};
         $('contact-phone').textContent = c.phone || 'не указан';
         $('contact-email').textContent = c.email || 'не указан';
 
-        // Кнопки, зависящие от телефона
-        $('btn-whatsapp').disabled = !c.phone;
-        $('btn-telegram').disabled = !c.phone;
+        // Второстепенные кнопки
         $('btn-copy-phone').disabled = !c.phone;
-
-        // Кнопки, зависящие от email
         $('btn-email').disabled = !c.email;
         $('btn-copy-email').disabled = !c.email;
 
         $('contact-card').classList.remove('card--hidden');
         $('empty-card').classList.add('card--hidden');
+    }
+
+    /**
+     * Запускает определение мессенджеров и обновляет кнопки.
+     * @param {number} ownerTypeId — 1 лид, 2 сделка
+     * @param {string|number} entityId — ID сущности
+     * @param {Object} c — нормализованный контакт (для rawEmails)
+     */
+    function detectMessengers(ownerTypeId, entityId, c) {
+        setBadge('whatsapp', 'проверяю…', false);
+        setBadge('telegram', 'проверяю…', false);
+        setBadge('max', 'проверяю…', false);
+
+        Opora.Messengers.detect(ownerTypeId, entityId, c.rawEmails || [])
+            .then(function (map) {
+                messengers = map;
+                updateMessengerButtons();
+            })
+            .catch(function (e) {
+                console.warn('[Opora] Определение мессенджеров:', e.message);
+                messengers = null;
+                updateMessengerButtons();
+            });
+    }
+
+    /**
+     * Обновляет вид кнопки одного мессенджера.
+     * @param {string} channel — 'whatsapp' | 'telegram' | 'max'
+     * @param {string} badgeText — текст статуса
+     * @param {boolean} active — канал подтверждён (есть переписка)
+     */
+    function setBadge(channel, badgeText, active) {
+        const btn = $('btn-' + channel);
+        const badge = $('badge-' + channel);
+        if (!btn || !badge) return;
+
+        badge.textContent = badgeText;
+        btn.classList.toggle('btn--active', active);
+        btn.classList.toggle('btn--unknown', !active);
+    }
+
+    /** Применяет карту мессенджеров к кнопкам. */
+    function updateMessengerButtons() {
+        const map = messengers || {};
+
+        ['whatsapp', 'telegram', 'max'].forEach(function (ch) {
+            const info = map[ch] || { hasChat: false };
+            setBadge(ch, info.hasChat ? 'переписка есть' : 'не проверено', info.hasChat);
+        });
+
+        // Без телефона WhatsApp-фолбэк (wa.me) невозможен
+        if (contact && !contact.phone && !(map.whatsapp && map.whatsapp.hasChat)) {
+            $('btn-whatsapp').disabled = true;
+        } else {
+            $('btn-whatsapp').disabled = false;
+        }
     }
 
     // ------------------------------------------------------------
@@ -212,16 +273,37 @@ window.Opora = window.Opora || {};
 
     /** Привязывает обработчики ко всем кнопкам. */
     function bindActions() {
+        // WhatsApp: есть переписка → открываем диалог OLChat в Bitrix24;
+        // нет — первое касание через wa.me
         $('btn-whatsapp').addEventListener('click', function () {
+            const info = messengers && messengers.whatsapp;
+            if (info && info.hasChat && info.dialogId && Opora.Messengers.openDialog(info.dialogId)) {
+                showToast('Открываю чат WhatsApp…');
+                return;
+            }
             if (contact && Opora.WhatsApp.open(contact.phone)) {
-                showToast('Открываю WhatsApp…');
+                showToast('Переписки ещё нет — открываю wa.me');
             }
         });
 
+        // Telegram: только существующий диалог Wazzup
         $('btn-telegram').addEventListener('click', function () {
-            if (contact && Opora.Telegram.open(contact.phone)) {
-                showToast('Открываю Telegram…');
+            const info = messengers && messengers.telegram;
+            if (info && info.hasChat && info.dialogId && Opora.Messengers.openDialog(info.dialogId)) {
+                showToast('Открываю чат Telegram…');
+                return;
             }
+            showToast('Переписки в Telegram ещё нет. Первое сообщение — шаблоном через Wazzup');
+        });
+
+        // MAX: только существующий диалог Wazzup
+        $('btn-max').addEventListener('click', function () {
+            const info = messengers && messengers.max;
+            if (info && info.hasChat && info.dialogId && Opora.Messengers.openDialog(info.dialogId)) {
+                showToast('Открываю чат MAX…');
+                return;
+            }
+            showToast('Переписки в MAX ещё нет. Первое сообщение — шаблоном через Wazzup');
         });
 
         $('btn-email').addEventListener('click', function () {
@@ -272,12 +354,18 @@ window.Opora = window.Opora || {};
             const c = await Opora.Crm.getContactByLead(entityId);
             renderContact(c);
             setStatus('ok', 'Bitrix24 · лид #' + entityId);
+
+            // Определяем мессенджеры клиента (по переписке в открытых линиях)
+            detectMessengers(1, entityId, c);
         } else if (isDealPlacement && entityId) {
             setStatus('loading', 'Сделка #' + entityId + ' — загрузка контакта…');
 
             const c = await Opora.Crm.getContactByDeal(entityId);
             renderContact(c);
             setStatus('ok', 'Bitrix24 · сделка #' + entityId);
+
+            // Определяем мессенджеры клиента (по переписке в открытых линиях)
+            detectMessengers(2, entityId, c);
         } else {
             setStatus('ok', 'Bitrix24 · размещение: ' + placementInfo.placement);
             showEmpty(

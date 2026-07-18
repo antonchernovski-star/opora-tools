@@ -56,6 +56,21 @@ Opora.Crm = (function () {
     }
 
     /**
+     * Первый «настоящий» email: служебные адреса Wazzup (…@max.wazzup)
+     * пропускаем — это маркеры каналов, а не почта клиента.
+     * @param {Array|undefined} field — мультиполе EMAIL
+     * @returns {string|null}
+     */
+    function firstRealEmail(field) {
+        if (!Array.isArray(field)) return null;
+        for (const item of field) {
+            const v = String(item && item.VALUE || '').trim();
+            if (v && !Opora.Messengers.isServiceEmail(v)) return v;
+        }
+        return null;
+    }
+
+    /**
      * Преобразует «сырой» контакт Bitrix24 в единый формат приложения.
      * @param {Object} raw — ответ crm.contact.get
      * @returns {Object} нормализованный контакт
@@ -71,7 +86,8 @@ Opora.Crm = (function () {
             lastName: lastName,
             fullName: fullName,
             phone: firstMultiFieldValue(raw.PHONE),
-            email: firstMultiFieldValue(raw.EMAIL)
+            email: firstRealEmail(raw.EMAIL),
+            rawEmails: Array.isArray(raw.EMAIL) ? raw.EMAIL : []
         };
     }
 
@@ -103,7 +119,8 @@ Opora.Crm = (function () {
             lastName: lastName,
             fullName: fullName,
             phone: firstMultiFieldValue(raw.PHONE),
-            email: firstMultiFieldValue(raw.EMAIL)
+            email: firstRealEmail(raw.EMAIL),
+            rawEmails: Array.isArray(raw.EMAIL) ? raw.EMAIL : []
         };
     }
 
