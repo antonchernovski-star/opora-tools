@@ -83,6 +83,20 @@
                 </button>
             </div>
 
+            <!-- Проверка номера на спам (SpravPortal) -->
+            <div class="phonecheck" id="phonecheck-block">
+                <button id="btn-phonecheck" class="btn btn--secondary" type="button">
+                    <span class="btn-icon">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6l7-3z"/>
+                            <path d="M9 12l2 2 4-4"/>
+                        </svg>
+                    </span>
+                    <span class="btn-label">Проверить номер на спам</span>
+                </button>
+                <div id="phonecheck-result" class="phonecheck-result phonecheck-result--hidden"></div>
+            </div>
+
             <!-- Второстепенные действия -->
             <div class="actions actions--secondary">
                 <button id="btn-copy-phone" class="btn btn--secondary" type="button">
@@ -132,7 +146,7 @@
         <div id="toast" class="toast" role="status"></div>
 
         <footer class="app-footer">
-            Опора · Инструменты · <span id="app-version">v1.3.0</span>
+            Опора · Инструменты · <span id="app-version">v1.4.0</span>
         </footer>
     </div>
 
@@ -149,6 +163,7 @@
     <script src="js/crm.js"></script>
     <script src="js/whatsapp.js"></script>
     <script src="js/telegram.js"></script>
+    <script src="js/phonecheck.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>
