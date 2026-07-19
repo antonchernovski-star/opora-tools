@@ -67,8 +67,23 @@ const CFG = {
     // Стадия «Ошибочная заявка» (ID статуса лида, например 'JUNK')
     spamStatusId: process.env.SPAM_STATUS_ID || 'JUNK',
     // Код пользовательского поля лида для вердикта
-    ufField: process.env.UF_FIELD || 'UF_CRM_OPORA_CHECK'
+    ufField: process.env.UF_FIELD || 'UF_CRM_OPORA_CHECK',
+    // Автопроверка опросом: раз в POLL_SECONDS сек сервер сам берёт новые
+    // лиды и проверяет их (0 = выключено; не зависит от роботов Bitrix24).
+    pollSeconds: parseInt(process.env.POLL_SECONDS || '0', 10)
 };
+
+/** Файл, где хранится ID последнего обработанного лида (watermark опроса). */
+const STATE_FILE = path.join(__dirname, 'poll-state.json');
+const STATE = { lastId: 0 };
+(function loadState() {
+    try {
+        if (fs.existsSync(STATE_FILE)) STATE.lastId = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')).lastId || 0;
+    } catch (e) { /* начнём с 0 */ }
+})();
+function saveState() {
+    try { fs.writeFileSync(STATE_FILE, JSON.stringify(STATE)); } catch (e) { console.warn('[opora-check] state save:', e.message); }
+}
 
 // ------------------------------------------------------------
 // Утилиты
@@ -345,10 +360,60 @@ const server = http.createServer(function (req, res) {
     });
 });
 
+// ------------------------------------------------------------
+// Автопроверка опросом (не зависит от роботов Bitrix24)
+// ------------------------------------------------------------
+
+let polling = false;
+
+/** Один проход опроса: берём лиды с ID больше watermark и проверяем. */
+async function pollOnce() {
+    if (polling) return;      // не наслаиваем проходы
+    polling = true;
+    try {
+        // При первом запуске (lastId=0) не проверяем всю базу — берём
+        // текущий максимальный ID лида и стартуем с него.
+        if (!STATE.lastId) {
+            const top = await b24('crm.lead.list', { order: { ID: 'DESC' }, select: ['ID'], start: 0 });
+            STATE.lastId = (top && top[0]) ? Number(top[0].ID) : 0;
+            saveState();
+            console.log('[opora-check] опрос стартовал с lastId=' + STATE.lastId);
+            return;
+        }
+
+        // Новые лиды (ID больше последнего обработанного), по возрастанию
+        const fresh = await b24('crm.lead.list', {
+            order: { ID: 'ASC' },
+            filter: { '>ID': STATE.lastId },
+            select: ['ID']
+        });
+        for (const l of (fresh || [])) {
+            const id = String(l.ID);
+            try {
+                const r = await processLead(id);
+                console.log('[opora-check] poll', JSON.stringify(r));
+            } catch (e) {
+                console.error('[opora-check] poll lead ' + id + ':', e.message);
+            }
+            STATE.lastId = Math.max(STATE.lastId, Number(id));
+            saveState();
+        }
+    } catch (e) {
+        console.error('[opora-check] poll:', e.message);
+    } finally {
+        polling = false;
+    }
+}
+
 server.listen(CFG.port, function () {
     console.log('[opora-check] listening on :' + CFG.port +
-        ' | autoClose=' + (CFG.autoClose ? 'ON' : 'OFF (наблюдательный режим)'));
+        ' | autoClose=' + (CFG.autoClose ? 'ON' : 'OFF (наблюдательный режим)') +
+        ' | poll=' + (CFG.pollSeconds ? CFG.pollSeconds + 's' : 'OFF'));
     if (!CFG.b24 || !CFG.token || !CFG.spravUrl || !CFG.spravKey) {
         console.warn('[opora-check] ВНИМАНИЕ: заполните .env (B24_WEBHOOK_URL, ENDPOINT_TOKEN, SPRAV_URL, SPRAV_KEY)');
+    }
+    if (CFG.pollSeconds > 0 && CFG.b24) {
+        setInterval(pollOnce, CFG.pollSeconds * 1000);
+        pollOnce();   // первый проход сразу — инициализирует watermark
     }
 });
