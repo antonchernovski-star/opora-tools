@@ -323,7 +323,10 @@ const server = http.createServer(function (req, res) {
         let leadId = u.searchParams.get('leadId') || u.searchParams.get('document_id');
         if (!leadId && body) {
             try { leadId = (JSON.parse(body).leadId || '') } catch (e) {
-                const m = body.match(/data%5BFIELDS%5D%5BID%5D=(\d+)/) || body.match(/data\[FIELDS\]\[ID\]=(\d+)/);
+                // Формат события ONCRMLEADADD: data[FIELDS][ID]=123
+                const m = body.match(/data%5BFIELDS%5D%5BID%5D=(\d+)/) || body.match(/data\[FIELDS\]\[ID\]=(\d+)/)
+                    // Формат робота «Веб-хук»: document_id[2]=LEAD_123 (возможно URL-encoded)
+                    || body.match(/document_id(?:%5B|\[)2(?:%5D|\])=[A-Za-z_]*?(\d+)/i);
                 if (m) leadId = m[1];
             }
         }
