@@ -70,7 +70,14 @@ const CFG = {
     ufField: process.env.UF_FIELD || 'UF_CRM_OPORA_CHECK',
     // Автопроверка опросом: раз в POLL_SECONDS сек сервер сам берёт новые
     // лиды и проверяет их (0 = выключено; не зависит от роботов Bitrix24).
-    pollSeconds: parseInt(process.env.POLL_SECONDS || '0', 10)
+    pollSeconds: parseInt(process.env.POLL_SECONDS || '0', 10),
+    // Экономия лимитов: стадии, в которых лид НЕ проверяем (менеджер уже
+    // разобрал). Список STATUS_ID через запятую, например: 20,CONVERTED,JUNK
+    skipStatuses: String(process.env.SKIP_STATUSES || '').split(',')
+        .map(function (s) { return s.trim(); }).filter(Boolean),
+    // Экономия лимитов: пропускать лиды, в названии которых есть эта
+    // подстрока (например «Входящий звонок» — клиент сам позвонил, он живой)
+    skipTitle: String(process.env.SKIP_TITLE || '').trim().toLowerCase()
 };
 
 /** Файл, где хранится ID последнего обработанного лида (watermark опроса). */
@@ -263,7 +270,9 @@ const ENV_KEYS = [
     ['GREEN_MAX_TOKEN', 'Green API MAX: apiTokenInstance'],
     ['SPAM_STATUS_ID', 'ID стадии «Ошибочная заявка» (для автозакрытия)'],
     ['AUTO_CLOSE', 'Автозакрытие: 0 — наблюдательный режим, 1 — закрывать'],
-    ['POLL_SECONDS', 'Автопроверка: период опроса новых лидов, сек (0 — выключена)']
+    ['POLL_SECONDS', 'Автопроверка: период опроса новых лидов, сек (0 — выключена)'],
+    ['SKIP_STATUSES', 'Не проверять лиды в стадиях (STATUS_ID через запятую)'],
+    ['SKIP_TITLE', 'Не проверять лиды с этой подстрокой в названии']
 ];
 
 /** Отдаёт HTML-форму настройки с текущим состоянием (значения маскируются). */
@@ -386,15 +395,27 @@ async function pollOnce() {
         const fresh = await b24('crm.lead.list', {
             order: { ID: 'ASC' },
             filter: { '>ID': STATE.lastId },
-            select: ['ID']
+            select: ['ID', 'STATUS_ID', 'TITLE']
         });
         for (const l of (fresh || [])) {
             const id = String(l.ID);
-            try {
-                const r = await processLead(id);
-                console.log('[opora-check] poll', JSON.stringify(r));
-            } catch (e) {
-                console.error('[opora-check] poll lead ' + id + ':', e.message);
+            // Экономия лимитов: пропускаем лиды, которые менеджеры уже
+            // разобрали (дубль, успех, встреча и т.п.) и входящие звонки —
+            // клиент позвонил сам, проверка на спам не нужна.
+            const status = String(l.STATUS_ID || '');
+            const title = String(l.TITLE || '').toLowerCase();
+            const skipByStatus = CFG.skipStatuses.indexOf(status) !== -1;
+            const skipByTitle = CFG.skipTitle && title.indexOf(CFG.skipTitle) !== -1;
+            if (skipByStatus || skipByTitle) {
+                console.log('[opora-check] poll skip lead ' + id +
+                    (skipByStatus ? ' (стадия ' + status + ')' : ' (входящий звонок)'));
+            } else {
+                try {
+                    const r = await processLead(id);
+                    console.log('[opora-check] poll', JSON.stringify(r));
+                } catch (e) {
+                    console.error('[opora-check] poll lead ' + id + ':', e.message);
+                }
             }
             STATE.lastId = Math.max(STATE.lastId, Number(id));
             saveState();
