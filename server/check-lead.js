@@ -227,6 +227,68 @@ async function writeResult(leadId, verdict, comment) {
 }
 
 // ------------------------------------------------------------
+// Одноразовая веб-форма настройки (/setup) — чтобы вводить ключи
+// в браузере, а не в VNC-консоли без вставки. Защищена тем же токеном.
+// После сохранения .env сервис завершается — systemd перезапустит
+// его уже с новыми настройками.
+// ------------------------------------------------------------
+
+const ENV_KEYS = [
+    ['B24_WEBHOOK_URL', 'Входящий вебхук Bitrix24 (https://stopdolg.bitrix24.ru/rest/…/…/)'],
+    ['SPRAV_URL', 'SpravPortal: адрес сервиса'],
+    ['SPRAV_KEY', 'SpravPortal: ключ API (sp_…)'],
+    ['GREEN_WA_URL', 'Green API WhatsApp: apiUrl'],
+    ['GREEN_WA_ID', 'Green API WhatsApp: idInstance'],
+    ['GREEN_WA_TOKEN', 'Green API WhatsApp: apiTokenInstance'],
+    ['GREEN_TG_URL', 'Green API Telegram: apiUrl'],
+    ['GREEN_TG_ID', 'Green API Telegram: idInstance'],
+    ['GREEN_TG_TOKEN', 'Green API Telegram: apiTokenInstance'],
+    ['GREEN_MAX_URL', 'Green API MAX: apiUrl'],
+    ['GREEN_MAX_ID', 'Green API MAX: idInstance'],
+    ['GREEN_MAX_TOKEN', 'Green API MAX: apiTokenInstance'],
+    ['SPAM_STATUS_ID', 'ID стадии «Ошибочная заявка» (для автозакрытия)'],
+    ['AUTO_CLOSE', 'Автозакрытие: 0 — наблюдательный режим, 1 — закрывать']
+];
+
+/** Отдаёт HTML-форму настройки с текущим состоянием (значения маскируются). */
+function setupForm(res) {
+    let rows = '';
+    ENV_KEYS.forEach(function (pair) {
+        const k = pair[0], label = pair[1];
+        const cur = process.env[k] || '';
+        const hint = cur ? 'заполнено — оставьте пустым, чтобы не менять' : 'не заполнено';
+        rows += '<label>' + label + ' <i>(' + hint + ')</i><br>' +
+            '<input name="' + k + '" value="" autocomplete="off" style="width:100%"></label><br><br>';
+    });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">' +
+        '<title>Опора — настройка автопроверки</title>' +
+        '<style>body{font-family:sans-serif;max-width:640px;margin:30px auto;padding:0 16px;color:#333}' +
+        'input{padding:8px;border:1px solid #ccc;border-radius:6px}i{color:#888;font-weight:normal;font-size:12px}' +
+        'button{background:#2fc6f6;color:#fff;border:0;border-radius:8px;padding:12px 24px;font-size:15px;cursor:pointer}</style>' +
+        '</head><body><h2>Опора · настройка автопроверки лидов</h2>' +
+        '<p>Пустое поле = оставить текущее значение. После сохранения сервис перезапустится (~5 сек).</p>' +
+        '<form method="POST">' + rows + '<button type="submit">Сохранить и перезапустить</button></form></body></html>');
+}
+
+/** Принимает форму, переписывает .env, завершает процесс (systemd перезапустит). */
+function setupSave(body, res) {
+    const params = new URLSearchParams(body);
+    const lines = ['PORT=' + CFG.port, 'ENDPOINT_TOKEN=' + CFG.token, 'UF_FIELD=' + CFG.ufField];
+    ENV_KEYS.forEach(function (pair) {
+        const k = pair[0];
+        const v = (params.get(k) || '').trim() || process.env[k] || '';
+        if (v) lines.push(k + '=' + v);
+    });
+    fs.writeFileSync(path.join(__dirname, '.env'), lines.join('\n') + '\n', { mode: 0o600 });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<meta charset="utf-8"><p style="font-family:sans-serif">Сохранено. Сервис перезапускается — ' +
+        'через 5 секунд можно проверить <a href="/health">/health</a>.</p>');
+    console.log('[opora-check] .env обновлён через /setup — перезапуск');
+    setTimeout(function () { process.exit(0); }, 500);
+}
+
+// ------------------------------------------------------------
 // HTTP-сервер
 // ------------------------------------------------------------
 
@@ -239,6 +301,17 @@ const server = http.createServer(function (req, res) {
     }
 
     if (u.pathname === '/health') return reply(200, { ok: true, autoClose: CFG.autoClose });
+
+    // Форма настройки (одноразовая, по токену)
+    if (u.pathname === '/setup') {
+        if (!CFG.token || u.searchParams.get('token') !== CFG.token) return reply(403, { error: 'bad token' });
+        if (req.method === 'GET') return setupForm(res);
+        let sbody = '';
+        req.on('data', function (ch) { sbody += ch; if (sbody.length > 1e6) req.destroy(); });
+        req.on('end', function () { setupSave(sbody, res); });
+        return;
+    }
+
     if (u.pathname !== '/check') return reply(404, { error: 'not found' });
     if (!CFG.token || u.searchParams.get('token') !== CFG.token) return reply(403, { error: 'bad token' });
 
