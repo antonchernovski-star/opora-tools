@@ -20,6 +20,18 @@
  *  spam_no_messengers — спам-метка + подтверждено отсутствие всех мессенджеров;
  *  no_phone / error   — нет телефона / ошибка проверки.
  *
+ * ДОПОЛНИТЕЛЬНО (v2): ГРЕЙД КЛИЕНТА (потенциал) по ТЗ «Автоматический грейд».
+ *  Балльная модель из полей анкеты КЦ лида → поля лида:
+ *   UF_CRM_OPORA_GRADE (Зелёный/Жёлтый/Красный/Неполный),
+ *   UF_CRM_OPORA_SCORE (число), UF_CRM_OPORA_GRADE_NOTE (пометки).
+ *  Опрос изменённых лидов по DATE_MODIFY раз в GRADE_SECONDS сек;
+ *  запись только при изменении значений (защита от зацикливания).
+ *  Веса/пороги/правила — в grade-config.json (создаётся с дефолтами),
+ *  правится через GET/POST /grade-config без перезапуска.
+ *  Ручной расчёт: /grade?token=…&leadId=…
+ *  Валидация без записи: /grade-scan?token=…&days=7 (dry-run),
+ *  с записью: /grade-scan?token=…&days=7&apply=1
+ *
  * Запуск: node check-lead.js (Node.js >= 18, БЕЗ npm-зависимостей).
  * Все ключи — в переменных окружения (файл .env рядом, см. README).
  * НИКАКИЕ ключи не хранятся в коде и в репозитории.
@@ -77,15 +89,21 @@ const CFG = {
         .map(function (s) { return s.trim(); }).filter(Boolean),
     // Экономия лимитов: пропускать лиды, в названии которых есть эта
     // подстрока (например «Входящий звонок» — клиент сам позвонил, он живой)
-    skipTitle: String(process.env.SKIP_TITLE || '').trim().toLowerCase()
+    skipTitle: String(process.env.SKIP_TITLE || '').trim().toLowerCase(),
+    // Грейд клиента: период опроса изменённых лидов, сек (0 = выключено)
+    gradeSeconds: parseInt(process.env.GRADE_SECONDS || '300', 10)
 };
 
 /** Файл, где хранится ID последнего обработанного лида (watermark опроса). */
 const STATE_FILE = path.join(__dirname, 'poll-state.json');
-const STATE = { lastId: 0 };
+const STATE = { lastId: 0, gradeSince: '' };
 (function loadState() {
     try {
-        if (fs.existsSync(STATE_FILE)) STATE.lastId = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')).lastId || 0;
+        if (fs.existsSync(STATE_FILE)) {
+            const s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+            STATE.lastId = s.lastId || 0;
+            STATE.gradeSince = s.gradeSince || '';
+        }
     } catch (e) { /* начнём с 0 */ }
 })();
 function saveState() {
@@ -130,6 +148,22 @@ async function b24(method, params) {
         throw new Error('B24 ' + method + ': ' + (r.json && r.json.error_description || 'HTTP ' + r.status));
     }
     return r.json.result;
+}
+
+/** Списочный метод B24 с пагинацией (страницы по 50). capPages — предохранитель. */
+async function b24List(method, params, capPages) {
+    const all = [];
+    let start = 0;
+    for (let p = 0; p < (capPages || 10); p++) {
+        const r = await postJson(CFG.b24 + '/' + method + '.json', Object.assign({}, params, { start: start }));
+        if (!r.json || r.json.error) {
+            throw new Error('B24 ' + method + ': ' + (r.json && r.json.error_description || 'HTTP ' + r.status));
+        }
+        const chunk = r.json.result || [];
+        for (const it of chunk) all.push(it);
+        if (typeof r.json.next === 'number') { start = r.json.next; } else { break; }
+    }
+    return all;
 }
 
 // ------------------------------------------------------------
@@ -249,6 +283,260 @@ async function writeResult(leadId, verdict, comment) {
 }
 
 // ------------------------------------------------------------
+// ГРЕЙД КЛИЕНТА (потенциал) — балльная модель по ТЗ.
+// Все веса, пороги и правила — в grade-config.json (не хардкод).
+// ------------------------------------------------------------
+
+const GRADE_CONFIG_FILE = path.join(__dirname, 'grade-config.json');
+
+/**
+ * Дефолтная конфигурация: веса откалиброваны по воронке ofbfl
+ * (22 076 лидов, янв–июль 2026). ID значений — enum-поля лида
+ * портала stopdolg.bitrix24.ru (поколение анкеты КЦ «17052025»).
+ */
+const GRADE_DEFAULTS = {
+    // Поля лида
+    fields: {
+        sum: 'UF_CRM_1747492825',        // КО - Сумма всех кредитов 17052025
+        property: 'UF_CRM_1747493130',   // КО - Имущество 17052025
+        risk: 'UF_CRM_1747493296',       // КО - Риск потери имущества 17052025
+        incomeOff: 'UF_CRM_1747493174',  // КО - Официальный доход 17052025
+        incomeTotal: 'UF_CRM_1747493252',// КО - Общий доход 17052025
+        payment: 'UF_CRM_1747492987',    // КО - Ежемесячный платёж 17052025
+        debtNature: 'UF_CRM_1783479388494', // КО - Характер долга (new, мульти)
+        grade: 'UF_CRM_OPORA_GRADE',
+        score: 'UF_CRM_OPORA_SCORE',
+        note: 'UF_CRM_OPORA_GRADE_NOTE'
+    },
+    // Баллы: ID значения списка → балл (ТЗ, разделы 3.1–3.4)
+    points: {
+        sum:      { '3660': -30, '3662': -20, '3664': -10, '3666': 5, '3668': 25, '3670': 35, '3672': 20, '3658': 0 },
+        property: { '3726': 10, '3728': 15, '3730': 5, '3732': -5, '3734': -20, '3736': -25, '3724': 0 },
+        risk:     { '3766': 20, '3770': 5, '3768': -15, '3764': 0 },
+        incomeOff:{ '4352': -10, '3740': -10, '3742': -10, '3744': 5, '3746': 5, '3748': 0, '3750': 0, '3752': -5, '3738': 0 }
+    },
+    // «Не уточнил» по ключевым полям → грейд не считается (статус «Неполный»)
+    unknownIds: { sum: '3658', property: '3724', risk: '3764', incomeOff: '3738', incomeTotal: '3754', payment: '3696' },
+    // Задавленность: платёж «От 50 001» при доходе ниже 50к → штраф
+    squeeze: {
+        paymentHighId: '3704',
+        lowIncomeTotalIds: ['6014', '5986', '3756', '5988', '3758'],
+        lowIncomeOffIds: ['4352', '3740', '3742', '3744', '3746'],
+        penalty: -10
+    },
+    // Переопределения (ТЗ, раздел 5). pledgeIds — Ипотека, Залоговый кредит
+    overrides: {
+        pledgeIds: ['5964', '5966'],
+        mortgageId: '5964',
+        riskNotReadyId: '3768',
+        propertySingleHomeId: '3728',
+        forceRedOnPledgeNotReady: true,
+        capYellowOnPledge: true
+    },
+    // Пороги цвета (ТЗ, раздел 4)
+    thresholds: { green: 35, yellow: 0 },
+    // ID значений поля «Грейд клиента (потенциал)»
+    gradeEnum: { green: '6150', yellow: '6152', red: '6154', incomplete: '6156' }
+};
+
+let GRADE_CFG = null;
+let GRADE_CFG_MTIME = 0;
+
+/** Читает grade-config.json (создаёт с дефолтами при первом запуске). */
+function gradeConfig() {
+    try {
+        if (!fs.existsSync(GRADE_CONFIG_FILE)) {
+            fs.writeFileSync(GRADE_CONFIG_FILE, JSON.stringify(GRADE_DEFAULTS, null, 2), { mode: 0o600 });
+        }
+        const mt = fs.statSync(GRADE_CONFIG_FILE).mtimeMs;
+        if (!GRADE_CFG || mt !== GRADE_CFG_MTIME) {
+            GRADE_CFG = JSON.parse(fs.readFileSync(GRADE_CONFIG_FILE, 'utf8'));
+            GRADE_CFG_MTIME = mt;
+        }
+    } catch (e) {
+        console.error('[opora-grade] config:', e.message, '— использую дефолты');
+        GRADE_CFG = GRADE_DEFAULTS;
+    }
+    return GRADE_CFG;
+}
+
+/** Значение enum-поля лида как строка ID ('' если пусто). */
+function enumVal(lead, field) {
+    const v = lead[field];
+    if (v === null || v === undefined || v === false || v === '' || v === '0') return '';
+    return String(v);
+}
+
+/** Мультиполе как массив строк-ID. */
+function enumMulti(lead, field) {
+    const v = lead[field];
+    if (!Array.isArray(v)) return [];
+    return v.map(String).filter(function (x) { return x && x !== '0'; });
+}
+
+/**
+ * Считает грейд по данным лида. Возвращает
+ * { grade: 'green|yellow|red|incomplete|skip', score, notes[], detail{} }.
+ * 'skip' — анкета не начата вовсе, ничего не пишем.
+ */
+function computeGrade(lead) {
+    const cfg = gradeConfig();
+    const F = cfg.fields, U = cfg.unknownIds;
+
+    const sum = enumVal(lead, F.sum);
+    const property = enumVal(lead, F.property);
+    const risk = enumVal(lead, F.risk);
+    const incomeOff = enumVal(lead, F.incomeOff);
+    const incomeTotal = enumVal(lead, F.incomeTotal);
+    const payment = enumVal(lead, F.payment);
+    const debtNature = enumMulti(lead, F.debtNature);
+
+    // Анкета не начата — не трогаем лид (не шумим «Неполными» по всей базе)
+    const anyFilled = sum || property || risk || incomeOff || incomeTotal || payment || debtNature.length;
+    if (!anyFilled) return { grade: 'skip', score: 0, notes: [], detail: {} };
+
+    const notes = [];
+    const detail = {};
+    let score = 0;
+
+    function add(part, id) {
+        const p = (cfg.points[part] || {})[id];
+        const val = typeof p === 'number' ? p : 0;
+        detail[part] = { id: id || null, points: val };
+        score += val;
+    }
+    add('sum', sum);
+    add('property', property);
+    add('risk', risk);
+    add('incomeOff', incomeOff);
+
+    // Задавленность платежом: платёж «От 50 001», доход (общий, иначе офиц.) < 50к
+    const sq = cfg.squeeze;
+    let squeezed = false;
+    if (payment === sq.paymentHighId) {
+        if (incomeTotal && incomeTotal !== U.incomeTotal) {
+            squeezed = sq.lowIncomeTotalIds.indexOf(incomeTotal) !== -1;
+        } else if (incomeOff && incomeOff !== U.incomeOff) {
+            squeezed = sq.lowIncomeOffIds.indexOf(incomeOff) !== -1;
+        }
+    }
+    if (squeezed) { score += sq.penalty; notes.push('задавлен платежом'); }
+    detail.squeeze = { applied: squeezed, points: squeezed ? sq.penalty : 0 };
+
+    // Неполный: ключевые поля (сумма, имущество) пустые или «Не уточнил»
+    const sumUnknown = !sum || sum === U.sum;
+    const propUnknown = !property || property === U.property;
+    if (sumUnknown || propUnknown) {
+        const missing = [];
+        if (sumUnknown) missing.push('сумма кредитов');
+        if (propUnknown) missing.push('имущество');
+        return { grade: 'incomplete', score: score, notes: ['уточнить: ' + missing.join(', ')], detail: detail };
+    }
+
+    // Частичный расчёт: второстепенные поля не заполнены
+    const partial = [];
+    if (!risk || risk === U.risk) partial.push('риск потери');
+    if (!incomeOff || incomeOff === U.incomeOff) partial.push('офиц. доход');
+    if (!payment || payment === U.payment) partial.push('платёж');
+    if (partial.length) notes.push('частичный расчёт (нет: ' + partial.join(', ') + ')');
+
+    // Цвет по порогам
+    const th = cfg.thresholds;
+    let grade = score >= th.green ? 'green' : score >= th.yellow ? 'yellow' : 'red';
+
+    // Переопределения (юридические факты сильнее статистики)
+    const ov = cfg.overrides;
+    const hasPledge = debtNature.some(function (id) { return ov.pledgeIds.indexOf(id) !== -1; });
+    if (ov.forceRedOnPledgeNotReady && hasPledge && risk === ov.riskNotReadyId) {
+        grade = 'red';
+        notes.push('принудительно красный: залог/ипотека + не готов к потере');
+    } else if (ov.capYellowOnPledge && hasPledge && grade === 'green') {
+        grade = 'yellow';
+        notes.push('не выше жёлтого: есть ипотека/залоговый кредит');
+    }
+    if (property === ov.propertySingleHomeId && debtNature.indexOf(ov.mortgageId) !== -1) {
+        notes.push('ипотека на ЕЖ (298-ФЗ, особый сценарий)');
+    }
+
+    return { grade: grade, score: score, notes: notes, detail: detail };
+}
+
+/** Поля лида, нужные для расчёта и сравнения. */
+function gradeSelectFields() {
+    const F = gradeConfig().fields;
+    return ['ID', 'TITLE', 'STATUS_ID', 'DATE_MODIFY',
+        F.sum, F.property, F.risk, F.incomeOff, F.incomeTotal, F.payment, F.debtNature,
+        F.grade, F.score, F.note];
+}
+
+/**
+ * Применяет расчёт к лиду: пишет поля ТОЛЬКО при изменении.
+ * Возвращает {leadId, grade, score, notes, written}.
+ */
+async function gradeLead(lead, dryRun) {
+    const cfg = gradeConfig();
+    const F = cfg.fields;
+    const r = computeGrade(lead);
+    const out = { leadId: Number(lead.ID), title: lead.TITLE, grade: r.grade, score: r.score, notes: r.notes, written: false };
+    if (r.grade === 'skip') return out;
+
+    const targetEnum = r.grade === 'incomplete' ? cfg.gradeEnum.incomplete : cfg.gradeEnum[r.grade];
+    const noteText = r.notes.join('; ').slice(0, 250);
+
+    const curEnum = enumVal(lead, F.grade);
+    const curScore = lead[F.score] === null || lead[F.score] === undefined || lead[F.score] === '' ? null : Number(lead[F.score]);
+    const curNote = String(lead[F.note] || '');
+
+    const changed = curEnum !== String(targetEnum) || curScore !== r.score || curNote !== noteText;
+    if (!changed || dryRun) return out;
+
+    const fields = {};
+    fields[F.grade] = targetEnum;
+    fields[F.score] = r.score;
+    fields[F.note] = noteText;
+    await b24('crm.lead.update', { id: lead.ID, fields: fields });
+    out.written = true;
+    return out;
+}
+
+/** Один проход опроса грейда: лиды, изменённые после watermark. */
+let gradePolling = false;
+async function gradePollOnce() {
+    if (gradePolling) return;
+    gradePolling = true;
+    try {
+        if (!STATE.gradeSince) {
+            STATE.gradeSince = new Date().toISOString();
+            saveState();
+            console.log('[opora-grade] опрос стартовал с ' + STATE.gradeSince);
+            return;
+        }
+        const since = STATE.gradeSince;
+        const leads = await b24List('crm.lead.list', {
+            order: { DATE_MODIFY: 'ASC' },
+            filter: { '>DATE_MODIFY': since },
+            select: gradeSelectFields()
+        }, 6);
+        let maxMod = since;
+        for (const lead of leads) {
+            try {
+                const r = await gradeLead(lead, false);
+                if (r.written) console.log('[opora-grade]', JSON.stringify(r));
+            } catch (e) {
+                console.error('[opora-grade] lead ' + lead.ID + ':', e.message);
+            }
+            const dm = new Date(lead.DATE_MODIFY).toISOString();
+            if (dm > maxMod) maxMod = dm;
+        }
+        if (maxMod !== since) { STATE.gradeSince = maxMod; saveState(); }
+    } catch (e) {
+        console.error('[opora-grade] poll:', e.message);
+    } finally {
+        gradePolling = false;
+    }
+}
+
+// ------------------------------------------------------------
 // Одноразовая веб-форма настройки (/setup) — чтобы вводить ключи
 // в браузере, а не в VNC-консоли без вставки. Защищена тем же токеном.
 // После сохранения .env сервис завершается — systemd перезапустит
@@ -272,7 +560,8 @@ const ENV_KEYS = [
     ['AUTO_CLOSE', 'Автозакрытие: 0 — наблюдательный режим, 1 — закрывать'],
     ['POLL_SECONDS', 'Автопроверка: период опроса новых лидов, сек (0 — выключена)'],
     ['SKIP_STATUSES', 'Не проверять лиды в стадиях (STATUS_ID через запятую)'],
-    ['SKIP_TITLE', 'Не проверять лиды с этой подстрокой в названии']
+    ['SKIP_TITLE', 'Не проверять лиды с этой подстрокой в названии'],
+    ['GRADE_SECONDS', 'Грейд клиента: период опроса изменённых лидов, сек (0 — выключен)']
 ];
 
 /** Отдаёт HTML-форму настройки с текущим состоянием (значения маскируются). */
@@ -325,7 +614,68 @@ const server = http.createServer(function (req, res) {
         res.end(JSON.stringify(obj));
     }
 
-    if (u.pathname === '/health') return reply(200, { ok: true, autoClose: CFG.autoClose });
+    if (u.pathname === '/health') return reply(200, { ok: true, autoClose: CFG.autoClose, gradeSeconds: CFG.gradeSeconds });
+
+    // --- Грейд: конфиг весов (GET — посмотреть, POST — сохранить) ---
+    if (u.pathname === '/grade-config') {
+        if (!CFG.token || u.searchParams.get('token') !== CFG.token) return reply(403, { error: 'bad token' });
+        if (req.method === 'GET') return reply(200, gradeConfig());
+        let cbody = '';
+        req.on('data', function (ch) { cbody += ch; if (cbody.length > 1e6) req.destroy(); });
+        req.on('end', function () {
+            try {
+                const parsed = JSON.parse(cbody);
+                fs.writeFileSync(GRADE_CONFIG_FILE, JSON.stringify(parsed, null, 2), { mode: 0o600 });
+                GRADE_CFG = null; // перечитать при следующем расчёте
+                reply(200, { ok: true });
+            } catch (e) { reply(400, { error: 'bad json: ' + e.message }); }
+        });
+        return;
+    }
+
+    // --- Грейд: ручной расчёт одного лида ---
+    if (u.pathname === '/grade') {
+        if (!CFG.token || u.searchParams.get('token') !== CFG.token) return reply(403, { error: 'bad token' });
+        const gid = String(u.searchParams.get('leadId') || '').match(/(\d+)\s*$/);
+        if (!gid) return reply(400, { error: 'leadId required' });
+        const dry = u.searchParams.get('dry') === '1';
+        (async function () {
+            try {
+                const lead = await b24('crm.lead.get', { id: gid[1] });
+                const res = await gradeLead(lead, dry);
+                res.detail = computeGrade(lead).detail;
+                console.log('[opora-grade] manual', JSON.stringify(res));
+                reply(200, res);
+            } catch (e) { reply(500, { error: e.message }); }
+        })();
+        return;
+    }
+
+    // --- Грейд: скан изменённых лидов за N дней (dry-run по умолчанию) ---
+    if (u.pathname === '/grade-scan') {
+        if (!CFG.token || u.searchParams.get('token') !== CFG.token) return reply(403, { error: 'bad token' });
+        const days = Math.min(parseInt(u.searchParams.get('days') || '7', 10) || 7, 90);
+        const apply = u.searchParams.get('apply') === '1';
+        (async function () {
+            try {
+                const since = new Date(Date.now() - days * 86400000).toISOString();
+                const leads = await b24List('crm.lead.list', {
+                    order: { DATE_MODIFY: 'DESC' },
+                    filter: { '>DATE_MODIFY': since },
+                    select: gradeSelectFields()
+                }, 6);
+                const out = [];
+                for (const lead of leads) {
+                    try {
+                        const r = await gradeLead(lead, !apply);
+                        if (r.grade !== 'skip') out.push(r);
+                    } catch (e) { out.push({ leadId: lead.ID, error: e.message }); }
+                }
+                reply(200, { since: since, scanned: leads.length, graded: out.length, apply: apply, results: out });
+            } catch (e) { reply(500, { error: e.message }); }
+        })();
+        return;
+    }
 
     // Форма настройки (одноразовая, по токену)
     if (u.pathname === '/setup') {
@@ -437,5 +787,10 @@ server.listen(CFG.port, function () {
     if (CFG.pollSeconds > 0 && CFG.b24) {
         setInterval(pollOnce, CFG.pollSeconds * 1000);
         pollOnce();   // первый проход сразу — инициализирует watermark
+    }
+    if (CFG.gradeSeconds > 0 && CFG.b24) {
+        console.log('[opora-grade] грейд включён, опрос раз в ' + CFG.gradeSeconds + ' с');
+        setInterval(gradePollOnce, CFG.gradeSeconds * 1000);
+        gradePollOnce();   // первый проход — инициализирует watermark
     }
 });
