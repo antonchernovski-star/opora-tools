@@ -217,8 +217,16 @@ async function checkMessenger(channel, digits) {
 // Основной сценарий по лиду
 // ------------------------------------------------------------
 
-async function processLead(leadId) {
+async function processLead(leadId, force) {
     const lead = await b24('crm.lead.get', { id: leadId });
+
+    // Идемпотентность для вызовов из БП: если вердикт уже стоит (и это не
+    // ошибка) — не тратим повторный запрос SpravPortal. force=1 перепроверяет.
+    const existing = String(lead[CFG.ufField] || '');
+    if (!force && existing && existing !== 'error') {
+        return { leadId: leadId, verdict: existing, cached: true };
+    }
+
     const phones = Array.isArray(lead.PHONE) ? lead.PHONE : [];
     const digits = normalizePhone(phones.length ? phones[0].VALUE : '');
 
@@ -331,6 +339,10 @@ const GRADE_DEFAULTS = {
     // Правило «Неполный»: 'debt' — только когда пуста сумма долга (реком.);
     // 'both' — сумма ИЛИ имущество; 'any' — сумма И имущество; 'none' — никогда.
     incompleteRule: 'debt',
+    // Плохо заполненная анкета: если «Не уточнил»/пусто в unknownCapCount и
+    // более полях из 7 — грейд не выше жёлтого (решение ком. блока 20.07:
+    // недозаполненная анкета не может быть зелёной). 0 = правило выключено.
+    unknownCapCount: 3,
     // Переопределения (ТЗ, раздел 5). pledgeIds — Ипотека, Залоговый кредит
     overrides: {
         pledgeIds: ['5964', '5966'],
@@ -445,9 +457,26 @@ function computeGrade(lead) {
     if (!payment || payment === U.payment) partial.push('платёж');
     if (partial.length) notes.push('частичный расчёт (нет: ' + partial.join(', ') + ')');
 
+    // Сколько из 7 полей не заполнено / «Не уточнил» (для капа жёлтым)
+    const unknownCount =
+        (sumUnknown ? 1 : 0) + (propUnknown ? 1 : 0) +
+        ((!risk || risk === U.risk) ? 1 : 0) +
+        ((!payment || payment === U.payment) ? 1 : 0) +
+        ((!incomeOff || incomeOff === U.incomeOff) ? 1 : 0) +
+        ((!incomeTotal || incomeTotal === U.incomeTotal) ? 1 : 0) +
+        ((!overdue || overdue === U.overdue) ? 1 : 0);
+
     // Цвет по порогам
     const th = cfg.thresholds;
     let grade = score >= th.green ? 'green' : score >= th.yellow ? 'yellow' : 'red';
+
+    // Плохо заполненная анкета не может быть зелёной (решение ком. блока):
+    // при unknownCapCount и более пустых полях — максимум жёлтый.
+    const capN = cfg.unknownCapCount || 0;
+    if (capN > 0 && unknownCount >= capN && grade === 'green') {
+        grade = 'yellow';
+        notes.push('не выше жёлтого: не уточнено полей — ' + unknownCount + ' из 7');
+    }
 
     // Переопределения (юридические факты сильнее статистики)
     const ov = cfg.overrides;
@@ -463,7 +492,16 @@ function computeGrade(lead) {
         notes.push('ипотека на ЕЖ (298-ФЗ, особый сценарий)');
     }
 
-    return { grade: grade, score: score, notes: notes, detail: detail };
+    // Компактная детализация исходных баллов — попадает в поле «Грейд:
+    // пометки», чтобы менеджер/РОП видел, из чего сложился скор.
+    const SHORT = { sum: 'долг', property: 'имущ', risk: 'риск', payment: 'плат', incomeOff: 'офдох', incomeTotal: 'обдох', overdue: 'проср' };
+    const parts = [];
+    for (const k in SHORT) {
+        if (detail[k] && detail[k].points) parts.push(SHORT[k] + (detail[k].points > 0 ? '+' : '') + detail[k].points);
+    }
+    const breakdown = 'Σ' + (score > 0 ? '+' : '') + score + (parts.length ? ' (' + parts.join(' ') + ')' : '');
+
+    return { grade: grade, score: score, notes: notes, detail: detail, breakdown: breakdown };
 }
 
 /** Поля лида, нужные для расчёта и сравнения. */
@@ -486,7 +524,7 @@ async function gradeLead(lead, dryRun) {
     if (r.grade === 'skip') return out;
 
     const targetEnum = r.grade === 'incomplete' ? cfg.gradeEnum.incomplete : cfg.gradeEnum[r.grade];
-    const noteText = r.notes.join('; ').slice(0, 250);
+    const noteText = ((r.breakdown ? r.breakdown + (r.notes.length ? ' | ' : '') : '') + r.notes.join('; ')).slice(0, 250);
 
     const curEnum = enumVal(lead, F.grade);
     const curScore = lead[F.score] === null || lead[F.score] === undefined || lead[F.score] === '' ? null : Number(lead[F.score]);
@@ -731,7 +769,8 @@ const server = http.createServer(function (req, res) {
         if (!idm) return reply(400, { error: 'leadId not found in request' });
 
         try {
-            const result = await processLead(idm[1]);
+            const force = u.searchParams.get('recheck') === '1' || u.searchParams.get('force') === '1';
+            const result = await processLead(idm[1], force);
             console.log('[opora-check]', JSON.stringify(result));
             reply(200, result);
         } catch (e) {
