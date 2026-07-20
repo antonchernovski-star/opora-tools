@@ -91,7 +91,13 @@ const CFG = {
     // подстрока (например «Входящий звонок» — клиент сам позвонил, он живой)
     skipTitle: String(process.env.SKIP_TITLE || '').trim().toLowerCase(),
     // Грейд клиента: период опроса изменённых лидов, сек (0 = выключено)
-    gradeSeconds: parseInt(process.env.GRADE_SECONDS || '300', 10)
+    gradeSeconds: parseInt(process.env.GRADE_SECONDS || '300', 10),
+    // Грейд клиента: считать ТОЛЬКО лиды на этих стадиях (STATUS_ID через
+    // запятую). По бизнес-логике: 12 = «Назначение встречи» (квалификация
+    // пройдена, анкета заполнена), 13 = «Встреча назначена точное время»
+    // (записан на встречу). Пусто = грейдить все изменённые лиды.
+    gradeStatuses: String(process.env.GRADE_STATUSES || '12,13').split(',')
+        .map(function (s) { return s.trim(); }).filter(Boolean)
 };
 
 /** Файл, где хранится ID последнего обработанного лида (watermark опроса). */
@@ -512,9 +518,14 @@ async function gradePollOnce() {
             return;
         }
         const since = STATE.gradeSince;
+        const filter = { '>DATE_MODIFY': since };
+        // Фильтр по стадиям: лид грейдится, когда попал на стадию из списка
+        // (перестановка стадии меняет DATE_MODIFY, поэтому опрос ловит сам
+        // факт перестановки с задержкой до gradeSeconds).
+        if (CFG.gradeStatuses.length) filter['STATUS_ID'] = CFG.gradeStatuses;
         const leads = await b24List('crm.lead.list', {
             order: { DATE_MODIFY: 'ASC' },
-            filter: { '>DATE_MODIFY': since },
+            filter: filter,
             select: gradeSelectFields()
         }, 6);
         let maxMod = since;
@@ -561,7 +572,8 @@ const ENV_KEYS = [
     ['POLL_SECONDS', 'Автопроверка: период опроса новых лидов, сек (0 — выключена)'],
     ['SKIP_STATUSES', 'Не проверять лиды в стадиях (STATUS_ID через запятую)'],
     ['SKIP_TITLE', 'Не проверять лиды с этой подстрокой в названии'],
-    ['GRADE_SECONDS', 'Грейд клиента: период опроса изменённых лидов, сек (0 — выключен)']
+    ['GRADE_SECONDS', 'Грейд клиента: период опроса изменённых лидов, сек (0 — выключен)'],
+    ['GRADE_STATUSES', 'Грейд: считать только лиды на стадиях (STATUS_ID через запятую; пусто — все)']
 ];
 
 /** Отдаёт HTML-форму настройки с текущим состоянием (значения маскируются). */
@@ -789,7 +801,8 @@ server.listen(CFG.port, function () {
         pollOnce();   // первый проход сразу — инициализирует watermark
     }
     if (CFG.gradeSeconds > 0 && CFG.b24) {
-        console.log('[opora-grade] грейд включён, опрос раз в ' + CFG.gradeSeconds + ' с');
+        console.log('[opora-grade] грейд включён, опрос раз в ' + CFG.gradeSeconds + ' с' +
+            (CFG.gradeStatuses.length ? ', стадии: ' + CFG.gradeStatuses.join(',') : ', все стадии'));
         setInterval(gradePollOnce, CFG.gradeSeconds * 1000);
         gradePollOnce();   // первый проход — инициализирует watermark
     }
