@@ -651,9 +651,19 @@ const server = http.createServer(function (req, res) {
         const gid = String(u.searchParams.get('leadId') || '').match(/(\d+)\s*$/);
         if (!gid) return reply(400, { error: 'leadId required' });
         const dry = u.searchParams.get('dry') === '1';
+        // force=1 обходит фильтр стадии (для ручных вызовов и теста).
+        // Без force — грейдим только лиды на стадиях GRADE_STATUSES, чтобы
+        // БП «Вебхук» можно было вешать без условия-ветвления: фильтр стадии
+        // делает сам сервис (лид не на нужной стадии → skip_stage, не пишем).
+        const force = u.searchParams.get('force') === '1';
         (async function () {
             try {
                 const lead = await b24('crm.lead.get', { id: gid[1] });
+                if (!force && CFG.gradeStatuses.length &&
+                    CFG.gradeStatuses.indexOf(String(lead.STATUS_ID)) === -1) {
+                    return reply(200, { leadId: Number(lead.ID), grade: 'skip_stage',
+                        status: lead.STATUS_ID, written: false });
+                }
                 const res = await gradeLead(lead, dry);
                 res.detail = computeGrade(lead).detail;
                 console.log('[opora-grade] manual', JSON.stringify(res));
