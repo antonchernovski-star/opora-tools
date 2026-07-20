@@ -93,10 +93,10 @@ const CFG = {
     // Грейд клиента: период опроса изменённых лидов, сек (0 = выключено)
     gradeSeconds: parseInt(process.env.GRADE_SECONDS || '300', 10),
     // Грейд клиента: считать ТОЛЬКО лиды на этих стадиях (STATUS_ID через
-    // запятую). По бизнес-логике: 12 = «Назначение встречи» (квалификация
-    // пройдена, анкета заполнена), 13 = «Встреча назначена точное время»
-    // (записан на встречу). Пусто = грейдить все изменённые лиды.
-    gradeStatuses: String(process.env.GRADE_STATUSES || '12,13').split(',')
+    // запятую). Решение Антона 21.07: только 13 = «Встреча назначена точное
+    // время» — на «Назначении встречи» (12) анкета ещё сырая, нормально
+    // заполнена только к точному времени. Пусто = грейдить все изменённые.
+    gradeStatuses: String(process.env.GRADE_STATUSES || '13').split(',')
         .map(function (s) { return s.trim(); }).filter(Boolean)
 };
 
@@ -663,7 +663,7 @@ const server = http.createServer(function (req, res) {
         res.end(JSON.stringify(obj));
     }
 
-    if (u.pathname === '/health') return reply(200, { ok: true, autoClose: CFG.autoClose, gradeSeconds: CFG.gradeSeconds });
+    if (u.pathname === '/health') return reply(200, { ok: true, autoClose: CFG.autoClose, gradeSeconds: CFG.gradeSeconds, gradeStatuses: CFG.gradeStatuses });
 
     // --- Грейд: конфиг весов (GET — посмотреть, POST — сохранить) ---
     if (u.pathname === '/grade-config') {
