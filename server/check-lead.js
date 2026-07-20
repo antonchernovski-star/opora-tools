@@ -309,27 +309,28 @@ const GRADE_DEFAULTS = {
         incomeOff: 'UF_CRM_1747493174',  // КО - Официальный доход 17052025
         incomeTotal: 'UF_CRM_1747493252',// КО - Общий доход 17052025
         payment: 'UF_CRM_1747492987',    // КО - Ежемесячный платёж 17052025
+        overdue: 'UF_CRM_1747493034',    // КО - Срок просрочки 17052025
         debtNature: 'UF_CRM_1783479388494', // КО - Характер долга (new, мульти)
         grade: 'UF_CRM_OPORA_GRADE',
         score: 'UF_CRM_OPORA_SCORE',
         note: 'UF_CRM_OPORA_GRADE_NOTE'
     },
-    // Баллы: ID значения списка → балл (ТЗ, разделы 3.1–3.4)
+    // Баллы: ID значения списка → балл. 7 полей (калибровка по дашборду 20.07,
+    // выборка 2816 лидов ofbfl). Веса можно менять в grade-config.json без деплоя.
     points: {
-        sum:      { '3660': -30, '3662': -20, '3664': -10, '3666': 5, '3668': 25, '3670': 35, '3672': 20, '3658': 0 },
-        property: { '3726': 10, '3728': 15, '3730': 5, '3732': -5, '3734': -20, '3736': -25, '3724': 0 },
-        risk:     { '3766': 20, '3770': 5, '3768': -15, '3764': 0 },
-        incomeOff:{ '4352': -10, '3740': -10, '3742': -10, '3744': 5, '3746': 5, '3748': 0, '3750': 0, '3752': -5, '3738': 0 }
+        sum:      { '3660': -30, '3662': -25, '3664': -15, '3666': 0, '3668': 20, '3670': 30, '3672': 18, '3658': 0 },
+        property: { '3726': 6, '3728': 8, '3730': 3, '3732': -3, '3734': -8, '3736': -10, '3724': 0 },
+        risk:     { '3766': 8, '3770': 3, '3768': -6, '3764': 0 },
+        payment:  { '4358': -15, '3698': -5, '3700': 5, '3702': 12, '3704': 18, '3696': 0 },
+        incomeOff:{ '4352': -8, '3740': -8, '3742': -5, '3744': 3, '3746': 3, '3748': 0, '3750': 0, '3752': -3, '3738': 0 },
+        incomeTotal:{ '6014': -15, '5986': -15, '3756': -12, '5988': -3, '3758': 3, '5990': 6, '3760': 10, '3762': 12, '3754': 0 },
+        overdue:  { '4334': 5, '3708': 25, '3710': 12, '3712': -15, '3706': 0 }
     },
-    // «Не уточнил» по ключевым полям → грейд не считается (статус «Неполный»)
-    unknownIds: { sum: '3658', property: '3724', risk: '3764', incomeOff: '3738', incomeTotal: '3754', payment: '3696' },
-    // Задавленность: платёж «От 50 001» при доходе ниже 50к → штраф
-    squeeze: {
-        paymentHighId: '3704',
-        lowIncomeTotalIds: ['6014', '5986', '3756', '5988', '3758'],
-        lowIncomeOffIds: ['4352', '3740', '3742', '3744', '3746'],
-        penalty: -10
-    },
+    // «Не уточнил» по полям (для правила неполноты и «частичного» расчёта)
+    unknownIds: { sum: '3658', property: '3724', risk: '3764', incomeOff: '3738', incomeTotal: '3754', payment: '3696', overdue: '3706' },
+    // Правило «Неполный»: 'debt' — только когда пуста сумма долга (реком.);
+    // 'both' — сумма ИЛИ имущество; 'any' — сумма И имущество; 'none' — никогда.
+    incompleteRule: 'debt',
     // Переопределения (ТЗ, раздел 5). pledgeIds — Ипотека, Залоговый кредит
     overrides: {
         pledgeIds: ['5964', '5966'],
@@ -339,8 +340,8 @@ const GRADE_DEFAULTS = {
         forceRedOnPledgeNotReady: true,
         capYellowOnPledge: true
     },
-    // Пороги цвета (ТЗ, раздел 4)
-    thresholds: { green: 35, yellow: 0 },
+    // Пороги цвета (калибровка по дашборду: green≥35, yellow≥-22, ниже — red)
+    thresholds: { green: 35, yellow: -22 },
     // ID значений поля «Грейд клиента (потенциал)»
     gradeEnum: { green: '6150', yellow: '6152', red: '6154', incomplete: '6156' }
 };
@@ -395,10 +396,11 @@ function computeGrade(lead) {
     const incomeOff = enumVal(lead, F.incomeOff);
     const incomeTotal = enumVal(lead, F.incomeTotal);
     const payment = enumVal(lead, F.payment);
+    const overdue = enumVal(lead, F.overdue);
     const debtNature = enumMulti(lead, F.debtNature);
 
     // Анкета не начата — не трогаем лид (не шумим «Неполными» по всей базе)
-    const anyFilled = sum || property || risk || incomeOff || incomeTotal || payment || debtNature.length;
+    const anyFilled = sum || property || risk || incomeOff || incomeTotal || payment || overdue || debtNature.length;
     if (!anyFilled) return { grade: 'skip', score: 0, notes: [], detail: {} };
 
     const notes = [];
@@ -411,38 +413,35 @@ function computeGrade(lead) {
         detail[part] = { id: id || null, points: val };
         score += val;
     }
+    // 7 факторов баллами (калибровка по дашборду). Платёж и общий доход —
+    // явными баллами (прежний squeeze убран, чтобы не считать платёж дважды).
     add('sum', sum);
     add('property', property);
     add('risk', risk);
+    add('payment', payment);
     add('incomeOff', incomeOff);
+    add('incomeTotal', incomeTotal);
+    add('overdue', overdue);
 
-    // Задавленность платежом: платёж «От 50 001», доход (общий, иначе офиц.) < 50к
-    const sq = cfg.squeeze;
-    let squeezed = false;
-    if (payment === sq.paymentHighId) {
-        if (incomeTotal && incomeTotal !== U.incomeTotal) {
-            squeezed = sq.lowIncomeTotalIds.indexOf(incomeTotal) !== -1;
-        } else if (incomeOff && incomeOff !== U.incomeOff) {
-            squeezed = sq.lowIncomeOffIds.indexOf(incomeOff) !== -1;
-        }
-    }
-    if (squeezed) { score += sq.penalty; notes.push('задавлен платежом'); }
-    detail.squeeze = { applied: squeezed, points: squeezed ? sq.penalty : 0 };
-
-    // Неполный: ключевые поля (сумма, имущество) пустые или «Не уточнил»
+    // Неполный: по правилу incompleteRule (см. grade-config).
+    const rule = cfg.incompleteRule || 'debt';
     const sumUnknown = !sum || sum === U.sum;
     const propUnknown = !property || property === U.property;
-    if (sumUnknown || propUnknown) {
-        const missing = [];
+    let incomplete = false, missing = [];
+    if (rule === 'both') { incomplete = sumUnknown || propUnknown; }
+    else if (rule === 'any') { incomplete = sumUnknown && propUnknown; }
+    else if (rule === 'none') { incomplete = false; }
+    else { incomplete = sumUnknown; }            // 'debt' (по умолчанию)
+    if (incomplete) {
         if (sumUnknown) missing.push('сумма кредитов');
-        if (propUnknown) missing.push('имущество');
+        if (propUnknown && rule !== 'debt') missing.push('имущество');
         return { grade: 'incomplete', score: score, notes: ['уточнить: ' + missing.join(', ')], detail: detail };
     }
 
     // Частичный расчёт: второстепенные поля не заполнены
     const partial = [];
+    if (propUnknown) partial.push('имущество');
     if (!risk || risk === U.risk) partial.push('риск потери');
-    if (!incomeOff || incomeOff === U.incomeOff) partial.push('офиц. доход');
     if (!payment || payment === U.payment) partial.push('платёж');
     if (partial.length) notes.push('частичный расчёт (нет: ' + partial.join(', ') + ')');
 
@@ -471,7 +470,7 @@ function computeGrade(lead) {
 function gradeSelectFields() {
     const F = gradeConfig().fields;
     return ['ID', 'TITLE', 'STATUS_ID', 'DATE_MODIFY',
-        F.sum, F.property, F.risk, F.incomeOff, F.incomeTotal, F.payment, F.debtNature,
+        F.sum, F.property, F.risk, F.incomeOff, F.incomeTotal, F.payment, F.overdue, F.debtNature,
         F.grade, F.score, F.note];
 }
 
